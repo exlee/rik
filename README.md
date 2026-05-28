@@ -1,3 +1,4 @@
+![](./assets/rik.png)
 # rik
 
 ```
