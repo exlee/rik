@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 /// Supported LLM providers.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum Provider {
     #[default]
     OpenAI,
@@ -19,7 +19,7 @@ pub enum Provider {
     Mistral,
     Cohere,
     /// Generic OpenAI-compatible endpoint (custom URL required).
-    #[serde(alias = "openai_compatible")]
+    #[serde(alias = "open_ai_compatible", alias = "openaicompatible")]
     OpenAiCompatible,
 }
 
@@ -39,19 +39,19 @@ pub struct ModelConfig {
     /// Which provider to use. Defaults to "openai".
     ///
     /// Supported values: openai, anthropic, gemini, ollama, openrouter, xai,
-    /// deepseek, groq, together, perplexity, mistral, cohere, open_ai_compatible.
+    /// deepseek, groq, together, perplexity, mistral, cohere, openaicompatible.
     #[serde(default)]
     pub provider: Provider,
 
     /// API base URL. Optional — when omitted the provider default is used.
-    /// Required for `open_ai_compatible`.
+    /// Required for `openaicompatible`.
     ///
     /// Examples:
     ///   openai:          "https://api.openai.com/v1"       (default)
     ///   anthropic:       "https://api.anthropic.com"        (default)
     ///   gemini:          "https://generativelanguage.googleapis.com" (default)
     ///   ollama:          "http://localhost:11434"           (default)
-    ///   open_ai_compatible: "<your-endpoint>"               (required)
+    ///   openaicompatible: "<your-endpoint>"                 (required)
     pub url: Option<String>,
 
     /// API key. Read from environment variable when omitted.
@@ -69,7 +69,7 @@ pub struct ModelConfig {
     ///   perplexity:      PERPLEXITY_API_KEY
     ///   mistral:         MISTRAL_API_KEY
     ///   cohere:          COHERE_API_KEY
-    ///   open_ai_compatible: OPENAI_API_KEY
+    ///   openaicompatible: OPENAI_API_KEY
     pub api_key: Option<String>,
 
     /// Model name (e.g. "gpt-4o", "claude-sonnet-4-20250514", "gemini-2.5-pro").

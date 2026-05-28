@@ -20,7 +20,7 @@ pub fn build_openai_compatible(
     let url = cfg
         .url
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Provider 'open_ai_compatible' requires 'url' in config"))?;
+        .ok_or_else(|| anyhow::anyhow!("Provider 'openaicompatible' requires 'url' in config"))?;
     let api_key = resolve_api_key(
         &cfg.api_key,
         Provider::OpenAiCompatible,

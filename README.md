@@ -197,9 +197,9 @@ diff_tool = ["difft", "--color", "always", "$pre", "$post"]
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | *(provider default)* |
 | Mistral | `mistral` | `MISTRAL_API_KEY` | *(provider default)* |
 | Cohere | `cohere` | `COHERE_API_KEY` | *(provider default)* |
-| Custom endpoint | `open_ai_compatible` | `OPENAI_API_KEY` | *(required via `url`)* |
+| Custom endpoint | `openaicompatible` | `OPENAI_API_KEY` | *(required via `url`)* |
 
-The `open_ai_compatible` provider lets you target any OpenAI-compatible API (LM Studio, vLLM, local proxies, etc.) by setting a custom `url`.
+The `openaicompatible` provider lets you target any OpenAI-compatible API (LM Studio, vLLM, local proxies, etc.) by setting a custom `url`.
 
 When `diff_tool` is unset, rik auto-detects `difft`, `delta`, or plain `diff`.
 
