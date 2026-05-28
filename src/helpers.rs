@@ -217,9 +217,12 @@ pub fn expand_glob(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
 
         // Otherwise treat as a glob pattern.
         use glob::glob;
-        let matches = glob(part)
-            .with_context(|| format!("Invalid glob pattern: {part}"))?;
-        results.extend(matches.filter_map(|entry| entry.ok()).filter(|p| p.is_file()));
+        let matches = glob(part).with_context(|| format!("Invalid glob pattern: {part}"))?;
+        results.extend(
+            matches
+                .filter_map(|entry| entry.ok())
+                .filter(|p| p.is_file()),
+        );
     }
 
     Ok(results)

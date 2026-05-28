@@ -155,14 +155,20 @@ puts π.inspect
 
 ## Installation
 
+### crates.io
+
 ```bash
-cargo install --path crates/rik
+cargo install rik
 ```
 
-Or build from source:
+### Pre-built binaries
+
+Cross-compiled binaries for Linux and macOS (x86_64 and ARM64) are available from the [GitHub Actions / Build](../../actions/workflows/build.yml) workflow runs. Download the artifact archive for your platform from the latest successful run.
+
+### Build from source
 
 ```bash
-cd crates/rik && cargo build --release
+cargo build --release
 ```
 
 ## Configuration

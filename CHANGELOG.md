@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-28
+
+### Added
+- Swappable LLM provider support via config — 13 providers: OpenAI, Anthropic, Gemini, Ollama, OpenRouter, xAI, DeepSeek, Groq, Together, Perplexity, Mistral, Cohere, and OpenAI-compatible custom endpoints
+- Provider-aware API key resolution: explicit config value > environment variable per provider
+- Support for comma-separated glob patterns (e.g. `rik 'src/**/*.rs,tests/**/*.rs'`)
+- CI workflow with fmt/clippy/test checks and cross-compiled builds (Linux x86_64/ARM64, macOS x86_64/ARM64, Windows MSVC)
+- `cargo install rik` installation method documented in README
+- Pre-built cross-compiled binaries available from GitHub Actions
+
+### Changed
+- Config format rewritten: replaced `completion_url`/`completion_api_key`/`completion_model` with `provider`, `url`, `api_key`, `model` (**breaking config change**)
+- Completion engine made generic over `CompletionClient` instead of hardcoded to OpenAI
+- Updated installation instructions in README (no longer a workspace sub-crate)
+
+### Fixed
+- Verbose reasoning output: reasoning tag reset now only fires when verbose mode is active, preventing stray ANSI escape sequences
+
 ## [0.1.0] - 2026-05-28
 
 ### Added
