@@ -166,17 +166,39 @@ cd crates/rik && cargo build --release
 
 ## Configuration
 
-Create `~/.config/rik/rik.toml` with just two things: where to reach your LLM and how to show diffs.
+Create `~/.config/rik/rik.toml` with your LLM provider settings and optional diff tool.
 
 ```toml
 [model]
-completion_url = "https://api.openai.com/v1"
-completion_api_key = "sk-..."
-completion_model = "gpt-4o"
+provider = "openai"
+model = "gpt-4o"
+# api_key is optional — omit to read from environment variable
+# url is optional — omit to use the provider default endpoint
+#url = "https://api.openai.com/v1"
 
 # Optional: custom diff command. Use $pre and $post as placeholders.
 diff_tool = ["difft", "--color", "always", "$pre", "$post"]
 ```
+
+### Supported providers
+
+| Provider | Config value | Env var | Default URL |
+|---|---|---|---|
+| OpenAI | `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com` |
+| Gemini | `gemini` | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com` |
+| Ollama | `ollama` | *(none)* | `http://localhost:11434` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` | *(provider default)* |
+| xAI | `xai` | `XAI_API_KEY` | *(provider default)* |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | *(provider default)* |
+| Groq | `groq` | `GROQ_API_KEY` | *(provider default)* |
+| Together | `together` | `TOGETHER_API_KEY` | *(provider default)* |
+| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | *(provider default)* |
+| Mistral | `mistral` | `MISTRAL_API_KEY` | *(provider default)* |
+| Cohere | `cohere` | `COHERE_API_KEY` | *(provider default)* |
+| Custom endpoint | `open_ai_compatible` | `OPENAI_API_KEY` | *(required via `url`)* |
+
+The `open_ai_compatible` provider lets you target any OpenAI-compatible API (LM Studio, vLLM, local proxies, etc.) by setting a custom `url`.
 
 When `diff_tool` is unset, rik auto-detects `difft`, `delta`, or plain `diff`.
 
@@ -270,4 +292,4 @@ I found gap in LLM-tooling that I couldn't fill otherwise:
 
 It started as an experiment for agentic tool, but I found `rik` pleasantly ergonomic and decided to release it.
 
-Note: I didn't try it with OpenAI only with local model. `rig` (library used for LLM interaction) so quite friendly so drop a PR request if your provider didn't work.
+Note: `rig` (the library used for LLM interaction) supports many providers out of the box. If your provider isn't listed above, open an issue or PR.
