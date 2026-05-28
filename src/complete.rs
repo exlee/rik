@@ -1,0 +1,354 @@
+use anyhow::Context;
+use futures::StreamExt;
+use std::io::Write;
+use rig::agent::MultiTurnStreamItem;
+use rig::client::CompletionClient;
+use rig::streaming::{StreamingPrompt, StreamedAssistantContent};
+
+use crate::config::Config;
+use crate::helpers::{expand_glob, make_completion_client};
+
+use crate::tools;
+
+/// Return the file extension or "unknown".
+fn file_extension(path: &std::path::Path) -> &str {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("unknown")
+}
+
+/// Extract a window of lines around `center_line` (1-based).
+/// Returns the lines with line numbers prefixed.
+fn surrounding_lines(content: &str, center_line: usize, radius: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let start = center_line.saturating_sub(radius + 1);
+    let end = (center_line + radius).min(lines.len());
+    lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:>4} | {}", start + i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Preamble injected into the agent for file-completion mode.
+fn make_preamble(alias: &str) -> String {
+    format!("\
+You are an in-place editor. A file contains '{alias}: <instruction>' markers that \
+must be replaced with real content. The file is a working document (code, prose, \
+config, etc.) and your edits must keep it coherent and correct.
+
+There may be MULTIPLE markers in the file. Process ALL of them in a single pass. \
+Do NOT stop after the first one.
+
+Tools:
+- read_file: read other files for context (types, imports, conventions).
+- edit_file: replace exact text in the target file. old_text must be unique.
+- list_files: discover files in the project.
+
+Rules:
+- Study the surrounding lines BEFORE editing. Your replacement must fit the \
+  existing style, indentation, language, and intent of the file.
+- If the file is code, respect existing imports, types, and variable names. \
+  Add needed imports only if you can verify they are missing.
+- If you are unsure about conventions, read nearby files for reference.
+- You may make MULTIPLE edit_file calls if the change requires touching more \
+  than one spot (e.g. adding an import AND inserting code).
+- Each edit_file call must have a unique old_text match.
+- Do NOT add comments explaining what you did. Just make the edit.
+- Do NOT echo back the file contents. The edit_file call IS your output.
+- After editing, provide a SHORT summary of what you changed (under 250 characters). \
+  A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.")
+}
+
+async fn process_file_markers(
+    comp_client: &rig::providers::openai::CompletionsClient,
+    model_name: &str,
+    alias: &str,
+    diff_tool: Option<&Vec<String>>,
+    file_path: &std::path::Path,
+    verbose: bool,
+) -> anyhow::Result<usize> {
+    let content_before = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read: {}", file_path.display()))?;
+
+    let markers = tools::find_markers(&content_before, alias);
+    if markers.is_empty() {
+        return Ok(0);
+    }
+
+    let halt_tag = format!("!{alias}");
+    if content_before.lines().any(|line| line.contains(&halt_tag)) {
+        println!(
+            "Found {} marker(s) in {} — skipped ({} guard present)",
+            markers.len(),
+            file_path.display(),
+            halt_tag
+        );
+        return Ok(0);
+    }
+
+    println!(
+        "Found {} marker(s) in {}",
+        markers.len(),
+        file_path.display()
+    );
+
+    for (line_no, query) in &markers {
+        println!("  [line {line_no}] Query: {query}");
+    }
+
+    // Build a single prompt with all markers.
+    let file_display = file_path.display().to_string();
+    let markers_block = markers
+        .iter()
+        .map(|(line_no, query)| {
+            format!(
+                "Marker at line {line_no}: {alias}: {query}\n\
+                 Surrounding context:\n{}",
+                surrounding_lines(&content_before, *line_no, 5)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+
+    let prompt = format!(
+        "Target file: {file_display}\n\
+         File type: {}\n\
+         Number of markers to complete: {}\n\
+         {}\n\n\
+         Read the file and any other context you need, then replace ALL markers \
+         with content that is coherent with the rest of the file according to each instruction.",
+        file_extension(file_path),
+        markers.len(),
+        markers_block,
+    );
+
+    let preamble = make_preamble(alias);
+    let agent = comp_client
+        .agent(model_name)
+        .preamble(&preamble)
+        .tool(tools::ReadFileTool)
+        .tool(tools::EditFileTool)
+        .tool(tools::ListFilesTool)
+        .default_max_turns(20)
+        .build();
+
+    let mut stream = agent.stream_prompt(&prompt).await;
+    let mut is_reasoning = false;
+    let mut last_text = false;
+
+    while let Some(item) = stream.next().await {
+        if !matches!(&item, Ok(MultiTurnStreamItem::StreamAssistantItem(
+                    StreamedAssistantContent::Text(_text)))) {
+            last_text = false;
+        }
+        match item {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Reasoning(reasoning),
+            )) if verbose => {
+                if !is_reasoning {
+                    is_reasoning = true;
+                    print!("\n    \x1b[90m// thinking...\x1b[0m\n");
+                }
+                print!("    \x1b[90m{}\x1b[0m", reasoning.display_text());
+                std::io::stdout().flush().ok();
+            }
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::ReasoningDelta { reasoning, .. },
+            )) if verbose => {
+                if !is_reasoning {
+                    is_reasoning = true;
+                    print!("\n    \x1b[90m// thinking...\x1b[0m\n");
+                }
+                print!("    \x1b[90m{}\x1b[0m", reasoning);
+                std::io::stdout().flush().ok();
+            }
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Text(text),
+            )) if verbose => {
+                if is_reasoning {
+                    is_reasoning = false;
+                    print!("\n    \x1b[0m");
+                }
+                if !last_text {
+                    print!("    ");
+                    last_text = true;
+                }
+                print!("{}", text.text);
+                std::io::stdout().flush().ok();
+            }
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::ToolCall { tool_call, .. },
+            )) => {
+                if is_reasoning {
+                    is_reasoning = false;
+                    if verbose { print!("\n    \x1b[0m"); }
+                }
+                println!("    [tool: {}]", tool_call.function.name);
+            }
+            Ok(MultiTurnStreamItem::FinalResponse(res)) => {
+                if is_reasoning {
+                    if verbose { print!("\n    \x1b[0m"); }
+                }
+                let summary = res.response();
+                if summary.is_empty() {
+                    println!("    Done.");
+                } else {
+                    println!("    Done: {summary}");
+                }
+            }
+            Err(e) => {
+                eprintln!("    Stream error: {e}");
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    // Show diff if the file changed.
+    let content_after = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
+
+    if content_before != content_after {
+        if let Some(cmd) = crate::helpers::resolve_diff_tool(diff_tool) {
+            let label = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            println!("\n--- diff ({label}) ---");
+            let diff_output = crate::helpers::run_diff(&cmd, label, &content_before, &content_after);
+            if !diff_output.is_empty() {
+                println!("{diff_output}");
+            }
+        }
+    }
+
+    Ok(markers.len())
+}
+
+async fn scan_and_complete(
+    comp_client: &rig::providers::openai::CompletionsClient,
+    model_name: &str,
+    alias: &str,
+    diff_tool: Option<&Vec<String>>,
+    pattern: &str,
+    verbose: bool,
+) -> anyhow::Result<usize> {
+    let files = expand_glob(pattern)?;
+    if files.is_empty() {
+        anyhow::bail!("No files matched pattern: {pattern}");
+    }
+
+    let mut total = 0usize;
+    for file_path in &files {
+        total += process_file_markers(comp_client, model_name, alias, diff_tool, file_path, verbose).await?;
+    }
+
+    Ok(total)
+}
+
+/// Single-pass completion: scan once, process all markers.
+pub async fn cmd_complete(
+    config: &Config,
+    alias: &str,
+    pattern: String,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let comp_client = make_completion_client(&config.model);
+    let model = &config.model.completion_model;
+    let diff_tool = config.diff_tool.as_ref();
+
+    let count = scan_and_complete(&comp_client, model, alias, diff_tool, &pattern, verbose).await?;
+
+    if count == 0 {
+        println!("No '{alias}:' markers found.");
+    } else {
+        println!("Completed {count} marker(s).");
+    }
+
+    Ok(())
+}
+
+/// Compute the common ancestor directory of two paths.
+fn common_ancestor(a: &std::path::Path, b: &std::path::Path) -> std::path::PathBuf {
+    let a_components = a.components();
+    let b_components = b.components();
+    let mut common = std::path::PathBuf::new();
+    for (ca, cb) in a_components.zip(b_components) {
+        if ca == cb {
+            common.push(ca);
+        } else {
+            break;
+        }
+    }
+    common
+}
+
+/// Watch mode: continuously monitor files for new/changed markers.
+pub async fn cmd_watch(
+    config: &Config,
+    alias: &str,
+    pattern: String,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
+    use std::sync::mpsc;
+
+    // Expand the glob to find actual files, then derive a watch root.
+    let mut watch_path = crate::helpers::expand_glob(&pattern)
+        .context("Failed to expand glob pattern")?
+        .into_iter()
+        .fold(None, |acc: Option<std::path::PathBuf>, path| {
+            match acc {
+                None => Some(path.as_path().to_path_buf()),
+                Some(base) => Some(common_ancestor(&base, path.as_path())),
+            }
+        })
+        .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+
+    // Ensure we watch a directory, not a file.
+    while !watch_path.is_dir() {
+        watch_path = watch_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+    }
+
+    println!(
+        "Watching {} for '{alias}:' markers (pattern: {pattern})...",
+        watch_path.display()
+    );
+    println!("Press Ctrl+C to stop.\n");
+
+    let comp_client = make_completion_client(&config.model);
+    let model = config.model.completion_model.clone();
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = recommended_watcher(tx)?;
+    watcher.watch(&watch_path, RecursiveMode::Recursive)?;
+
+    // Initial scan.
+    let diff_tool = config.diff_tool.as_ref();
+    let _ = scan_and_complete(&comp_client, &model, alias, diff_tool, &pattern, verbose).await;
+
+    loop {
+        match rx.recv() {
+            Ok(Ok(_event)) => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                while rx.try_recv().is_ok() {}
+                if let Err(e) = scan_and_complete(&comp_client, &model, alias, diff_tool, &pattern, verbose).await {
+                    eprintln!("Watch error: {e:?}");
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Watch error: {e}");
+            }
+            Err(mpsc::RecvError) => {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
