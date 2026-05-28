@@ -256,3 +256,18 @@ rik is intentionally limited by design:
 - **Diff-first feedback** -- every change produces a diff so you see exactly what was modified.
 
 It's a worker, not a companion. Summon it by name, give it instructions, let it work.
+
+## Rambling
+
+I found gap in LLM-tooling that I couldn't fill otherwise:
+- fill-in-middle is very limited when it comes to context - it's fast, but if it can't produce result then it can't and that's it
+- agentic development runs amock, by default models try to implement whole feature and it takes more energy to restrict than actually to develop
+
+`rik` is an attempt to fill that gap.
+
+- `rik` is designed to target single file for edition only; most often - single comment (it requires some self-discipline to make multiple ones)
+- `rik` can make its own context by listing or reading files
+
+It started as an experiment for agentic tool, but I found `rik` pleasantly ergonomic and decided to release it.
+
+Note: I didn't try it with OpenAI only with local model. `rig` (library used for LLM interaction) so quite friendly so drop a PR request if your provider didn't work.
