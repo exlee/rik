@@ -1,9 +1,9 @@
 use anyhow::Context;
 use futures::StreamExt;
-use std::io::Write;
 use rig::agent::MultiTurnStreamItem;
 use rig::client::CompletionClient;
-use rig::streaming::{StreamingPrompt, StreamedAssistantContent};
+use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+use std::io::Write;
 
 use crate::config::Config;
 use crate::helpers::{expand_glob, make_completion_client};
@@ -139,14 +139,18 @@ async fn process_file_markers(
     let mut last_text = false;
 
     while let Some(item) = stream.next().await {
-        if !matches!(&item, Ok(MultiTurnStreamItem::StreamAssistantItem(
-                    StreamedAssistantContent::Text(_text)))) {
+        if !matches!(
+            &item,
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Text(_text)
+            ))
+        ) {
             last_text = false;
         }
         match item {
-            Ok(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Reasoning(reasoning),
-            )) if verbose => {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
+                reasoning,
+            ))) if verbose => {
                 if !is_reasoning {
                     is_reasoning = true;
                     print!("\n    \x1b[90m// thinking...\x1b[0m\n");
@@ -164,9 +168,9 @@ async fn process_file_markers(
                 print!("    \x1b[90m{}\x1b[0m", reasoning);
                 std::io::stdout().flush().ok();
             }
-            Ok(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Text(text),
-            )) if verbose => {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)))
+                if verbose =>
+            {
                 if is_reasoning {
                     is_reasoning = false;
                     print!("\n    \x1b[0m");
@@ -178,18 +182,19 @@ async fn process_file_markers(
                 print!("{}", text.text);
                 std::io::stdout().flush().ok();
             }
-            Ok(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::ToolCall { tool_call, .. },
-            )) => {
-                if is_reasoning {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+                tool_call,
+                ..
+            })) => {
+                if is_reasoning && verbose {
                     is_reasoning = false;
-                    if verbose { print!("\n    \x1b[0m"); }
+                    print!("\n    \x1b[0m");
                 }
                 println!("    [tool: {}]", tool_call.function.name);
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
-                if is_reasoning {
-                    if verbose { print!("\n    \x1b[0m"); }
+                if is_reasoning && verbose {
+                    print!("\n    \x1b[0m");
                 }
                 let summary = res.response();
                 if summary.is_empty() {
@@ -210,17 +215,18 @@ async fn process_file_markers(
     let content_after = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
 
-    if content_before != content_after {
-        if let Some(cmd) = crate::helpers::resolve_diff_tool(diff_tool) {
-            let label = file_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file");
-            println!("\n--- diff ({label}) ---");
-            let diff_output = crate::helpers::run_diff(&cmd, label, &content_before, &content_after);
-            if !diff_output.is_empty() {
-                println!("{diff_output}");
-            }
+    if content_before != content_after
+        && let Some(cmd) = crate::helpers::resolve_diff_tool(diff_tool)
+    {
+        let label = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file");
+        println!("\n--- diff ({label}) ---");
+        let diff_output =
+            crate::helpers::run_diff(&cmd, label, &content_before, &content_after);
+        if !diff_output.is_empty() {
+            println!("{diff_output}");
         }
     }
 
@@ -242,7 +248,15 @@ async fn scan_and_complete(
 
     let mut total = 0usize;
     for file_path in &files {
-        total += process_file_markers(comp_client, model_name, alias, diff_tool, file_path, verbose).await?;
+        total += process_file_markers(
+            comp_client,
+            model_name,
+            alias,
+            diff_tool,
+            file_path,
+            verbose,
+        )
+        .await?;
     }
 
     Ok(total)
@@ -299,11 +313,9 @@ pub async fn cmd_watch(
     let mut watch_path = crate::helpers::expand_glob(&pattern)
         .context("Failed to expand glob pattern")?
         .into_iter()
-        .fold(None, |acc: Option<std::path::PathBuf>, path| {
-            match acc {
-                None => Some(path.as_path().to_path_buf()),
-                Some(base) => Some(common_ancestor(&base, path.as_path())),
-            }
+        .fold(None, |acc: Option<std::path::PathBuf>, path| match acc {
+            None => Some(path.as_path().to_path_buf()),
+            Some(base) => Some(common_ancestor(&base, path.as_path())),
         })
         .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
 
@@ -337,7 +349,10 @@ pub async fn cmd_watch(
             Ok(Ok(_event)) => {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 while rx.try_recv().is_ok() {}
-                if let Err(e) = scan_and_complete(&comp_client, &model, alias, diff_tool, &pattern, verbose).await {
+                if let Err(e) =
+                    scan_and_complete(&comp_client, &model, alias, diff_tool, &pattern, verbose)
+                        .await
+                {
                     eprintln!("Watch error: {e:?}");
                 }
             }

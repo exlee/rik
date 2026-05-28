@@ -32,7 +32,7 @@ impl From<std::io::Error> for CompleteMarkerError {
 }
 
 #[allow(dead_code)]
-/// A tool that replaces a "rik: <query>" marker in a file with completed text.
+/// A tool that replaces a `rik: <query>` marker in a file with completed text.
 ///
 /// This is the **only** writing tool available in file-completion mode, ensuring
 /// edits are restricted to the marker location.
@@ -49,7 +49,7 @@ impl Tool for CompleteMarkerTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Replace the entire line containing 'rik: <query>' with the \
+            description: "Replace the entire line containing `rik: <query>` with the \",
                           completed text. This is the ONLY way to write output in \
                           file-completion mode."
                 .to_string(),
@@ -74,11 +74,12 @@ impl Tool for CompleteMarkerTool {
         let path = Path::new(&args.file_path);
         let content = std::fs::read_to_string(path)?;
 
-        let replaced = replace_marker(&content, "rik", &args.completed_text)
-            .ok_or_else(|| CompleteMarkerError(format!(
+        let replaced = replace_marker(&content, "rik", &args.completed_text).ok_or_else(|| {
+            CompleteMarkerError(format!(
                 "No 'rik:' marker found in file: {}",
                 args.file_path
-            )))?;
+            ))
+        })?;
 
         std::fs::write(path, replaced)?;
         Ok(format!(
@@ -99,14 +100,12 @@ pub fn replace_marker(content: &str, alias: &str, replacement: &str) -> Option<S
     let mut found = false;
 
     for line in content.lines() {
-        if !found {
-            if line.contains(&prefix) {
-                for rline in replacement.lines() {
-                    result_lines.push(rline.to_string());
-                }
-                found = true;
-                continue;
+        if !found && line.contains(&prefix) {
+            for rline in replacement.lines() {
+                result_lines.push(rline.to_string());
             }
+            found = true;
+            continue;
         }
         result_lines.push(line.to_string());
     }

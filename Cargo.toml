@@ -2,6 +2,12 @@
 name = "rik"
 version = "0.1.0"
 edition = "2024"
+description = "Find markers in your files and replace them with LLM-generated content"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/exlee/rik"
+keywords = ["ai", "agent", "code-generation", "marker", "llm"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "rik"

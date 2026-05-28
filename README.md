@@ -1,23 +1,23 @@
 # rik
 
 ```
- ______________________________________________________________________
-|                                                                      |
-|  '########::'####:'##:::'##:                                         |
-|   ##.... ##:. ##:: ##::'##::       /\_/\   <- TRAPPED. STOP.         |
-|   ##:::: ##:: ##:: ##:'##:::      ( o.o )     IN CODEBASE. STOP.     |
-|   ########::: ##:: #####::::       > ^ <      SEND HELP. STOP.       |
-|   ##.. ##:::: ##:: ##. ##:::                                         |
-|   ##::. ##::: ##:: ##:. ##::                                         |
-|   ##:::. ##:'####: ##::. ##:      --= LIMITED AGENT EDITION =--      |
-|  ..:::::..::....::..::::..::                                         | 
-|____________________________________________________________________  |
-|                                                                      |
-|  "I literal-ly cannot move unless you write my name in a comment."   |
-|                                                                      |
-|  [ WARNING: This agent has the spatial awareness of a potted plant ] |
-|  [     and will only edit code within radius of its spawn.         ] |
-|______________________________________________________________________|
+         ______________________________________________________________________
+        |                                                                      |
+        |  '########::'####:'##:::'##:                                         |
+        |   ##.... ##:. ##:: ##::'##::       /\_/\   <- TRAPPED. STOP.         |
+        |   ##:::: ##:: ##:: ##:'##:::      ( o.o )     IN CODEBASE. STOP.     |
+        |   ########::: ##:: #####::::       > ^ <      SEND HELP. STOP.       |
+        |   ##.. ##:::: ##:: ##. ##:::                                         |
+        |   ##::. ##::: ##:: ##:. ##::                                         |
+        |   ##:::. ##:'####: ##::. ##:      --= LIMITED AGENT EDITION =--      |
+        |  ..:::::..::....::..::::..::                                         | 
+        |____________________________________________________________________  |
+        |                                                                      |
+        |  "I literal-ly cannot move unless you write my name in a comment."   |
+        |                                                                      |
+        |  [ WARNING: This agent has the spatial awareness of a potted plant ] |
+        |  [     and will only edit code within radius of its spawn.         ] |
+        |______________________________________________________________________|
 ```
          
 
@@ -45,6 +45,112 @@ Handle missing keys gracefully with sensible defaults.
 ```
 
 Supported delimiters: `[ ]`, `[[ ]]`, `[[[ ]]]`, `( )`, `(( ))`, `((( )))`, `{ }`, `{{ }}`, `{{{ }}}`.
+
+## Examples
+
+### Simple inline replacement
+
+Drop a comment marker above the line you want rewritten.
+
+<table style="width:100%">
+<tr><th>Before</th><th>After</th></tr>
+<tr><td>
+
+```python
+# rik: make it piratey
+print("Hello, world!")
+```
+
+</td><td>
+
+```python
+print("Ahoy, matey!")
+```
+
+</td></tr>
+</table>
+
+### Multi-line block around existing code
+
+Wrap existing code with a delimited marker to rewrite it.
+
+<table style="width:100%">
+<tr><th>Before</th><th>After</th></tr>
+<tr><td>
+
+```rust
+// rik: [[
+// make it recursive
+fn factorial(n: u64) -> u64 {
+    let mut result = 1;
+    for i in 1..=n {
+        result *= i;
+    }
+    result
+}
+// ]]
+```
+
+</td><td>
+
+```rust
+fn factorial(n: u64) -> u64 {
+    if n <= 1 {
+        1
+    } else {
+        n * factorial(n - 1)
+    }
+}
+```
+
+</td></tr>
+</table>
+
+### Complicate it!
+
+rik will faithfully follow even absurd instructions.
+
+<table style="width:100%">
+<tr><th>Before</th><th>After</th></tr>
+<tr><td>
+
+```ruby
+# rik: that's too easy, complicate it
+primes = []
+limit = 50
+(2..limit).each do |candidate|
+  is_prime = true
+  (2...candidate).each do |divisor|
+    if candidate % divisor == 0
+      is_prime = false
+      break
+    end
+  end
+  primes << candidate if is_prime
+end
+puts primes.inspect
+```
+
+</td><td>
+
+```ruby
+π = []
+λ = 50
+(2..λ).each do |φ|
+  ψ = true
+  (2...φ).each do |δ|
+    if φ % δ == 0
+      ψ = false
+      break
+    end
+  end
+  π << φ if ψ
+end
+puts π.inspect
+```
+
+</td></tr>
+</table>
 
 ## Installation
 

@@ -124,7 +124,13 @@ mod tests {
             })
             .await?;
 
-        assert_eq!(result, format!("[read_file] path={}\nline1\nline2\nline3", file_path.display()));
+        assert_eq!(
+            result,
+            format!(
+                "[read_file] path={}\nline1\nline2\nline3",
+                file_path.display()
+            )
+        );
         Ok(())
     }
 
@@ -143,7 +149,10 @@ mod tests {
             })
             .await?;
 
-        assert!(result.ends_with("line2\nline3"), "Expected result to end with 'line2\nline3', got: {result}");
+        assert!(
+            result.ends_with("line2\nline3"),
+            "Expected result to end with 'line2\nline3', got: {result}"
+        );
         Ok(())
     }
 

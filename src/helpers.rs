@@ -37,14 +37,18 @@ const DIFF_TOOL_CANDIDATES: &[&str] = &["difft", "delta", "diff"];
 /// `$pre`/`$post`). Otherwise auto-detects the first available tool and builds
 /// a default args list: `["<tool>", "$pre", "$post"]`.
 pub fn resolve_diff_tool(configured: Option<&Vec<String>>) -> Option<Vec<String>> {
-    if let Some(args) = configured {
-        if !args.is_empty() {
-            return Some(args.clone());
-        }
+    if let Some(args) = configured
+        && !args.is_empty()
+    {
+        return Some(args.clone());
     }
     for candidate in DIFF_TOOL_CANDIDATES {
         if which_exists(candidate) {
-            return Some(vec![candidate.to_string(), "$pre".to_string(), "$post".to_string()]);
+            return Some(vec![
+                candidate.to_string(),
+                "$pre".to_string(),
+                "$post".to_string(),
+            ]);
         }
     }
     None
@@ -66,12 +70,7 @@ fn which_exists(cmd: &str) -> bool {
 /// diff tool can detect the terminal and produce colored output. Returns an
 /// empty string in that case since output goes directly to the terminal.
 /// When not a TTY (piped), captures output and returns it as a string.
-pub fn run_diff(
-    args: &[String],
-    label: &str,
-    old_content: &str,
-    new_content: &str,
-) -> String {
+pub fn run_diff(args: &[String], label: &str, old_content: &str, new_content: &str) -> String {
     use std::io::IsTerminal;
 
     let dir = tempfile::tempdir().ok();
@@ -90,15 +89,13 @@ pub fn run_diff(
 
     let resolved: Vec<String> = args
         .iter()
-        .map(|a| {
-            a.replace("$pre", &pre_str)
-             .replace("$post", &post_str)
-        })
+        .map(|a| a.replace("$pre", &pre_str).replace("$post", &post_str))
         .collect();
 
     let is_tty = std::io::stdout().is_terminal();
 
-    let result = if is_tty {
+    // Temp files cleaned up when `dir` drops.
+    if is_tty {
         // Inherit stdout/stderr so the diff tool sees a real TTY and uses colors.
         std::process::Command::new(&resolved[0])
             .args(&resolved[1..])
@@ -127,8 +124,5 @@ pub fn run_diff(
             }
             Err(e) => format!("Failed to run diff tool '{}': {e}", resolved[0]),
         }
-    };
-
-    // Temp files cleaned up when `dir` drops.
-    result
+    }
 }
