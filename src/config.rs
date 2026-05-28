@@ -1,6 +1,28 @@
 use anyhow::Context;
 use serde::Deserialize;
 
+/// Supported LLM providers.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    #[default]
+    OpenAI,
+    Anthropic,
+    Gemini,
+    Ollama,
+    OpenRouter,
+    Xai,
+    DeepSeek,
+    Groq,
+    Together,
+    Perplexity,
+    Mistral,
+    Cohere,
+    /// Generic OpenAI-compatible endpoint (custom URL required).
+    #[serde(alias = "openai_compatible")]
+    OpenAiCompatible,
+}
+
 #[derive(Deserialize, Debug)]
 pub struct Config {
     pub model: ModelConfig,
@@ -14,9 +36,44 @@ pub struct Config {
 
 #[derive(Deserialize, Debug)]
 pub struct ModelConfig {
-    pub completion_url: String,
-    pub completion_api_key: String,
-    pub completion_model: String,
+    /// Which provider to use. Defaults to "openai".
+    ///
+    /// Supported values: openai, anthropic, gemini, ollama, openrouter, xai,
+    /// deepseek, groq, together, perplexity, mistral, cohere, open_ai_compatible.
+    #[serde(default)]
+    pub provider: Provider,
+
+    /// API base URL. Optional — when omitted the provider default is used.
+    /// Required for `open_ai_compatible`.
+    ///
+    /// Examples:
+    ///   openai:          "https://api.openai.com/v1"       (default)
+    ///   anthropic:       "https://api.anthropic.com"        (default)
+    ///   gemini:          "https://generativelanguage.googleapis.com" (default)
+    ///   ollama:          "http://localhost:11434"           (default)
+    ///   open_ai_compatible: "<your-endpoint>"               (required)
+    pub url: Option<String>,
+
+    /// API key. Read from environment variable when omitted.
+    ///
+    /// Environment variables checked per provider:
+    ///   openai:          OPENAI_API_KEY
+    ///   anthropic:       ANTHROPIC_API_KEY
+    ///   gemini:          GEMINI_API_KEY
+    ///   ollama:          (no key needed, ignored)
+    ///   openrouter:      OPENROUTER_API_KEY
+    ///   xai:             XAI_API_KEY
+    ///   deepseek:        DEEPSEEK_API_KEY
+    ///   groq:            GROQ_API_KEY
+    ///   together:        TOGETHER_API_KEY
+    ///   perplexity:      PERPLEXITY_API_KEY
+    ///   mistral:         MISTRAL_API_KEY
+    ///   cohere:          COHERE_API_KEY
+    ///   open_ai_compatible: OPENAI_API_KEY
+    pub api_key: Option<String>,
+
+    /// Model name (e.g. "gpt-4o", "claude-sonnet-4-20250514", "gemini-2.5-pro").
+    pub model: String,
 }
 
 fn find_config_path() -> Option<std::path::PathBuf> {

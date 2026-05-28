@@ -5,10 +5,65 @@ use rig::client::CompletionClient;
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use std::io::Write;
 
-use crate::config::Config;
-use crate::helpers::{expand_glob, make_completion_client};
-
+use crate::config::{Config, ModelConfig, Provider};
+use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::tools;
+
+// ---------------------------------------------------------------------------
+// Shared processing logic parameterized over provider client types via a macro.
+// Each provider has its own concrete Client + CompletionModel types so we can't
+// trait-object over them.  The macro generates typed wrappers per provider.
+// ---------------------------------------------------------------------------
+
+macro_rules! define_provider_dispatch {
+    (
+        $(
+            $variant:ident($fn_name:ident) => $client_type:ty
+        ),* $(,)?
+    ) => {
+        /// Dispatch to the correct handler based on the configured provider.
+        async fn scan_and_complete_dispatch(
+            cfg: &ModelConfig,
+            alias: &str,
+            diff_tool: Option<&Vec<String>>,
+            pattern: &str,
+            verbose: bool,
+        ) -> anyhow::Result<usize> {
+            match cfg.provider {
+                $(
+                    Provider::$variant => {
+                        let client = crate::helpers::$fn_name(cfg)
+                            .with_context(|| format!("Failed to build {:?} client", Provider::$variant))?;
+                        process_scan_and_complete::<$client_type>(
+                            &client,
+                            &cfg.model,
+                            alias,
+                            diff_tool,
+                            pattern,
+                            verbose,
+                        ).await
+                    }
+                )*
+            }
+        }
+    };
+}
+
+define_provider_dispatch!(
+    OpenAI(build_openai)              => rig::providers::openai::CompletionsClient,
+    Anthropic(build_anthropic)        => rig::providers::anthropic::Client,
+    Gemini(build_gemini)              => rig::providers::gemini::Client,
+    Ollama(build_ollama)              => rig::providers::ollama::Client,
+    OpenRouter(build_openrouter)      => rig::providers::openrouter::Client,
+    Xai(build_xai)                    => rig::providers::xai::Client,
+    DeepSeek(build_deepseek)          => rig::providers::deepseek::Client,
+    Groq(build_groq)                  => rig::providers::groq::Client,
+    Together(build_together)          => rig::providers::together::Client,
+    Perplexity(build_perplexity)      => rig::providers::perplexity::Client,
+    Mistral(build_mistral)            => rig::providers::mistral::Client,
+    Cohere(build_cohere)              => rig::providers::cohere::Client,
+    OpenAiCompatible(build_openai_compatible) => rig::providers::openai::CompletionsClient,
+);
 
 /// Return the file extension or "unknown".
 fn file_extension(path: &std::path::Path) -> &str {
@@ -61,14 +116,18 @@ Rules:
   A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.")
 }
 
-async fn process_file_markers(
-    comp_client: &rig::providers::openai::CompletionsClient,
+async fn process_file_markers<C>(
+    comp_client: &C,
     model_name: &str,
     alias: &str,
     diff_tool: Option<&Vec<String>>,
     file_path: &std::path::Path,
     verbose: bool,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<usize>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+{
     let content_before = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
 
@@ -171,7 +230,7 @@ async fn process_file_markers(
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)))
                 if verbose =>
             {
-                if is_reasoning {
+                if is_reasoning && verbose {
                     is_reasoning = false;
                     print!("\n    \x1b[0m");
                 }
@@ -216,15 +275,14 @@ async fn process_file_markers(
         .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
 
     if content_before != content_after
-        && let Some(cmd) = crate::helpers::resolve_diff_tool(diff_tool)
+        && let Some(cmd) = resolve_diff_tool(diff_tool)
     {
         let label = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
         println!("\n--- diff ({label}) ---");
-        let diff_output =
-            crate::helpers::run_diff(&cmd, label, &content_before, &content_after);
+        let diff_output = run_diff(&cmd, label, &content_before, &content_after);
         if !diff_output.is_empty() {
             println!("{diff_output}");
         }
@@ -233,14 +291,18 @@ async fn process_file_markers(
     Ok(markers.len())
 }
 
-async fn scan_and_complete(
-    comp_client: &rig::providers::openai::CompletionsClient,
+async fn process_scan_and_complete<C>(
+    comp_client: &C,
     model_name: &str,
     alias: &str,
     diff_tool: Option<&Vec<String>>,
     pattern: &str,
     verbose: bool,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<usize>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+{
     let files = expand_glob(pattern)?;
     if files.is_empty() {
         anyhow::bail!("No files matched pattern: {pattern}");
@@ -269,11 +331,9 @@ pub async fn cmd_complete(
     pattern: String,
     verbose: bool,
 ) -> anyhow::Result<()> {
-    let comp_client = make_completion_client(&config.model);
-    let model = &config.model.completion_model;
     let diff_tool = config.diff_tool.as_ref();
-
-    let count = scan_and_complete(&comp_client, model, alias, diff_tool, &pattern, verbose).await?;
+    let count =
+        scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose).await?;
 
     if count == 0 {
         println!("No '{alias}:' markers found.");
@@ -333,16 +393,14 @@ pub async fn cmd_watch(
     );
     println!("Press Ctrl+C to stop.\n");
 
-    let comp_client = make_completion_client(&config.model);
-    let model = config.model.completion_model.clone();
-
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = recommended_watcher(tx)?;
     watcher.watch(&watch_path, RecursiveMode::Recursive)?;
 
-    // Initial scan.
     let diff_tool = config.diff_tool.as_ref();
-    let _ = scan_and_complete(&comp_client, &model, alias, diff_tool, &pattern, verbose).await;
+
+    // Initial scan.
+    let _ = scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose).await;
 
     loop {
         match rx.recv() {
@@ -350,7 +408,7 @@ pub async fn cmd_watch(
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 while rx.try_recv().is_ok() {}
                 if let Err(e) =
-                    scan_and_complete(&comp_client, &model, alias, diff_tool, &pattern, verbose)
+                    scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose)
                         .await
                 {
                     eprintln!("Watch error: {e:?}");

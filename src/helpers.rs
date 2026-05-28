@@ -1,25 +1,210 @@
-use anyhow::Context;
-use rig::providers::openai;
+use anyhow::{Context, Result};
 
-use crate::config::ModelConfig;
+use crate::config::{ModelConfig, Provider};
 
-pub fn make_completion_client(cfg: &ModelConfig) -> openai::CompletionsClient {
-    openai::Client::builder()
-        .base_url(&cfg.completion_url)
-        .api_key(&cfg.completion_api_key)
-        .build()
-        .expect("Failed to build completion client")
-        .completions_api()
+/// Build an OpenAI Completions client from config.
+pub fn build_openai(cfg: &ModelConfig) -> Result<rig::providers::openai::CompletionsClient> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::OpenAI, Some("OPENAI_API_KEY"))?;
+    let mut builder = rig::providers::openai::CompletionsClient::builder().api_key(&api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build OpenAI client"))
 }
 
-pub fn expand_glob(pattern: &str) -> anyhow::Result<Vec<std::path::PathBuf>> {
+/// Build a generic OpenAI-compatible Completions client from config.
+/// Requires `url` to be set in config.
+pub fn build_openai_compatible(
+    cfg: &ModelConfig,
+) -> Result<rig::providers::openai::CompletionsClient> {
+    let url = cfg
+        .url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Provider 'open_ai_compatible' requires 'url' in config"))?;
+    let api_key = resolve_api_key(
+        &cfg.api_key,
+        Provider::OpenAiCompatible,
+        Some("OPENAI_API_KEY"),
+    )?;
+    let builder = rig::providers::openai::CompletionsClient::builder()
+        .base_url(url)
+        .api_key(&api_key);
+    Ok(builder
+        .build()
+        .expect("Failed to build OpenAI-compatible client"))
+}
+
+/// Build an Anthropic client from config.
+pub fn build_anthropic(cfg: &ModelConfig) -> Result<rig::providers::anthropic::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Anthropic, Some("ANTHROPIC_API_KEY"))?;
+    let mut builder = rig::providers::anthropic::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Anthropic client"))
+}
+
+/// Build a Gemini client from config.
+pub fn build_gemini(cfg: &ModelConfig) -> Result<rig::providers::gemini::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Gemini, Some("GEMINI_API_KEY"))?;
+    let mut builder = rig::providers::gemini::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Gemini client"))
+}
+
+/// Build an Ollama client from config.
+/// Ollama does not require authentication by default.
+pub fn build_ollama(cfg: &ModelConfig) -> Result<rig::providers::ollama::Client> {
+    use rig::client::Nothing;
+    let mut builder = rig::providers::ollama::Client::builder().api_key(Nothing);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Ollama client"))
+}
+
+/// Build an OpenRouter client from config.
+pub fn build_openrouter(cfg: &ModelConfig) -> Result<rig::providers::openrouter::Client> {
+    let api_key = resolve_api_key(
+        &cfg.api_key,
+        Provider::OpenRouter,
+        Some("OPENROUTER_API_KEY"),
+    )?;
+    let mut builder = rig::providers::openrouter::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build OpenRouter client"))
+}
+
+/// Build an xAI client from config.
+pub fn build_xai(cfg: &ModelConfig) -> Result<rig::providers::xai::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Xai, Some("XAI_API_KEY"))?;
+    let mut builder = rig::providers::xai::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build xAI client"))
+}
+
+/// Build a DeepSeek client from config.
+pub fn build_deepseek(cfg: &ModelConfig) -> Result<rig::providers::deepseek::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::DeepSeek, Some("DEEPSEEK_API_KEY"))?;
+    let mut builder = rig::providers::deepseek::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build DeepSeek client"))
+}
+
+/// Build a Groq client from config.
+pub fn build_groq(cfg: &ModelConfig) -> Result<rig::providers::groq::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Groq, Some("GROQ_API_KEY"))?;
+    let mut builder = rig::providers::groq::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Groq client"))
+}
+
+/// Build a Together client from config.
+pub fn build_together(cfg: &ModelConfig) -> Result<rig::providers::together::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Together, Some("TOGETHER_API_KEY"))?;
+    let mut builder = rig::providers::together::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Together client"))
+}
+
+/// Build a Perplexity client from config.
+pub fn build_perplexity(cfg: &ModelConfig) -> Result<rig::providers::perplexity::Client> {
+    let api_key = resolve_api_key(
+        &cfg.api_key,
+        Provider::Perplexity,
+        Some("PERPLEXITY_API_KEY"),
+    )?;
+    let mut builder = rig::providers::perplexity::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Perplexity client"))
+}
+
+/// Build a Mistral client from config.
+pub fn build_mistral(cfg: &ModelConfig) -> Result<rig::providers::mistral::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Mistral, Some("MISTRAL_API_KEY"))?;
+    let mut builder = rig::providers::mistral::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Mistral client"))
+}
+
+/// Build a Cohere client from config.
+pub fn build_cohere(cfg: &ModelConfig) -> Result<rig::providers::cohere::Client> {
+    let api_key = resolve_api_key(&cfg.api_key, Provider::Cohere, Some("COHERE_API_KEY"))?;
+    let mut builder = rig::providers::cohere::Client::builder().api_key(api_key);
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build Cohere client"))
+}
+
+/// Resolve the API key: explicit value > env var > error.
+fn resolve_api_key(
+    explicit: &Option<String>,
+    provider: Provider,
+    env_var: Option<&'static str>,
+) -> Result<String> {
+    if let Some(key) = explicit {
+        return Ok(key.clone());
+    }
+    if let Some(var) = env_var
+        && let Ok(key) = std::env::var(var)
+    {
+        return Ok(key);
+    }
+    let provider_name = format_provider_name(provider);
+    anyhow::bail!(
+        "No API key for {provider_name}. \
+         Set it in config or via {} environment variable.",
+        env_var.unwrap_or("<none>")
+    )
+}
+
+fn format_provider_name(p: Provider) -> &'static str {
+    match p {
+        Provider::OpenAI => "OpenAI",
+        Provider::Anthropic => "Anthropic",
+        Provider::Gemini => "Gemini",
+        Provider::Ollama => "Ollama",
+        Provider::OpenRouter => "OpenRouter",
+        Provider::Xai => "xAI",
+        Provider::DeepSeek => "DeepSeek",
+        Provider::Groq => "Groq",
+        Provider::Together => "Together",
+        Provider::Perplexity => "Perplexity",
+        Provider::Mistral => "Mistral",
+        Provider::Cohere => "Cohere",
+        Provider::OpenAiCompatible => "OpenAI-compatible",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Glob / diff helpers (unchanged)
+// ---------------------------------------------------------------------------
+
+pub fn expand_glob(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
     // If the pattern is a literal existing file, return it directly.
     let path = std::path::Path::new(pattern);
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
     }
 
-    // Otherwise treat it as a glob pattern.
+    // Otherwise treat as a glob pattern.
     use glob::glob;
     Ok(glob(pattern)
         .context("Invalid glob pattern")?
