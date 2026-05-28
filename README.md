@@ -207,10 +207,16 @@ When `diff_tool` is unset, rik auto-detects `difft`, `delta`, or plain `diff`.
 
 ### Single pass
 
-Scan files matching a glob and complete all markers in one go:
+Scan files matching a glob pattern and complete all markers in one go:
 
 ```bash
 rik 'src/**/*.rs'
+```
+
+Multiple patterns can be joined with commas:
+
+```bash
+rik 'src/**/*.rs,tests/**/*.rs'
 ```
 
 ### Watch mode

@@ -197,20 +197,32 @@ fn format_provider_name(p: Provider) -> &'static str {
 // Glob / diff helpers (unchanged)
 // ---------------------------------------------------------------------------
 
+/// Expand one or more comma-separated glob patterns into a list of file paths.
+/// Each segment is trimmed before expansion.
 pub fn expand_glob(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
-    // If the pattern is a literal existing file, return it directly.
-    let path = std::path::Path::new(pattern);
-    if path.is_file() {
-        return Ok(vec![path.to_path_buf()]);
+    let mut results: Vec<std::path::PathBuf> = Vec::new();
+
+    for part in pattern.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        // If the part is a literal existing file, return it directly.
+        let path = std::path::Path::new(part);
+        if path.is_file() {
+            results.push(path.to_path_buf());
+            continue;
+        }
+
+        // Otherwise treat as a glob pattern.
+        use glob::glob;
+        let matches = glob(part)
+            .with_context(|| format!("Invalid glob pattern: {part}"))?;
+        results.extend(matches.filter_map(|entry| entry.ok()).filter(|p| p.is_file()));
     }
 
-    // Otherwise treat as a glob pattern.
-    use glob::glob;
-    Ok(glob(pattern)
-        .context("Invalid glob pattern")?
-        .filter_map(|entry| entry.ok())
-        .filter(|p| p.is_file())
-        .collect())
+    Ok(results)
 }
 
 /// Diff tools to try in order when none is configured.

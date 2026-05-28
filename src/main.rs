@@ -8,7 +8,8 @@ mod tools;
 #[derive(Parser)]
 #[command(name = "rik", about = "Complete '<alias>: <query>' markers in files")]
 struct Cli {
-    /// File path or glob pattern to scan (e.g. "src/**/*.rs")
+    /// File path or glob pattern to scan; multiple patterns can be joined with ","
+    /// (e.g. "src/**/*.rs,tests/**/*.rs")
     pattern: String,
 
     /// Watch for changes and complete markers continuously
