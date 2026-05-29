@@ -3,6 +3,7 @@ use clap::Parser;
 mod complete;
 mod config;
 mod helpers;
+mod markers;
 mod tools;
 
 #[derive(Parser)]

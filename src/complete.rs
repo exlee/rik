@@ -134,7 +134,7 @@ where
     let content_before = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
 
-    let markers = tools::find_markers(&content_before, alias);
+    let markers = crate::markers::find_markers(&content_before, alias);
     if markers.is_empty() {
         return Ok(0);
     }
