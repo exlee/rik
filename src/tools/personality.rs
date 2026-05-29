@@ -23,13 +23,32 @@ pub enum Mood {
 pub fn moodify(mood: Mood, input: &str) -> String {
     match mood {
         Mood::None => input.to_string(),
-        Mood::Singing => todo!("apply singing mood"),
-        Mood::Anxious => todo!("apply anxious mood"),
-        Mood::Whispering => todo!("apply whispering mood"),
-        Mood::Screaming => todo!("apply screaming mood"),
-        Mood::Angry => todo!("apply angry mood"),
-        Mood::Grim => todo!("apply grim mood"),
-        Mood::Tired => todo!("apply tired mood"),
+        Mood::Singing => format!("\u{266A} {input} \u{266A}"),
+        Mood::Anxious => input
+            .split_whitespace()
+            .map(|w| format!("...{w}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Mood::Whispering => {
+            let inner = if input.is_empty() { " " } else { input };
+            format!("(...{inner}...)")
+        },
+        Mood::Screaming => format!("{}!", input.to_uppercase()),
+        Mood::Angry => input
+            .split_whitespace()
+            .map(|w| format!("{w}!"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Mood::Grim => input
+            .split_whitespace()
+            .map(|w| format!("{w}."))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Mood::Tired => input
+            .split_whitespace()
+            .map(|w| format!("{w}..."))
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 

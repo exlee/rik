@@ -8,5 +8,5 @@ pub mod write_file;
 pub use complete_marker::find_markers;
 pub use edit_file::EditFileTool;
 pub use list_files::ListFilesTool;
-pub use personality::{moodify, Mood};
+pub use personality::{moodify, Mood, Personality};
 pub use read_file::ReadFileTool;

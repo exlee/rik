@@ -28,6 +28,7 @@ macro_rules! define_provider_dispatch {
             diff_tool: Option<&Vec<String>>,
             pattern: &str,
             verbose: bool,
+            personality: bool,
         ) -> anyhow::Result<usize> {
             match cfg.provider {
                 $(
@@ -41,6 +42,7 @@ macro_rules! define_provider_dispatch {
                             diff_tool,
                             pattern,
                             verbose,
+                            personality,
                         ).await
                     }
                 )*
@@ -123,6 +125,7 @@ async fn process_file_markers<C>(
     diff_tool: Option<&Vec<String>>,
     file_path: &std::path::Path,
     verbose: bool,
+    personality: bool,
 ) -> anyhow::Result<usize>
 where
     C: CompletionClient,
@@ -171,27 +174,38 @@ where
         .collect::<Vec<_>>()
         .join("\n---\n");
 
+    let personality_inject = if personality {
+        "\n\nBefore doing any work make a comment using tools::Personality (up to 5 words).\n\
+         Once work is done make another comment using tools::Personality."
+    } else {
+        ""
+    };
+
     let prompt = format!(
         "Target file: {file_display}\n\
          File type: {}\n\
          Number of markers to complete: {}\n\
          {}\n\n\
          Read the file and any other context you need, then replace ALL markers \
-         with content that is coherent with the rest of the file according to each instruction.",
+         with content that is coherent with the rest of the file according to each instruction. {}",
         file_extension(file_path),
         markers.len(),
         markers_block,
+        personality_inject,
     );
 
     let preamble = make_preamble(alias);
-    let agent = comp_client
+    let mut agent_builder = comp_client
         .agent(model_name)
         .preamble(&preamble)
         .tool(tools::ReadFileTool)
         .tool(tools::EditFileTool)
         .tool(tools::ListFilesTool)
-        .default_max_turns(20)
-        .build();
+        .default_max_turns(20);
+    if personality {
+        agent_builder = agent_builder.tool(tools::Personality);
+    }
+    let agent = agent_builder.build();
 
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut is_reasoning = false;
@@ -298,6 +312,7 @@ async fn process_scan_and_complete<C>(
     diff_tool: Option<&Vec<String>>,
     pattern: &str,
     verbose: bool,
+    personality: bool,
 ) -> anyhow::Result<usize>
 where
     C: CompletionClient,
@@ -317,6 +332,7 @@ where
             diff_tool,
             file_path,
             verbose,
+            personality,
         )
         .await?;
     }
@@ -333,7 +349,7 @@ pub async fn cmd_complete(
 ) -> anyhow::Result<()> {
     let diff_tool = config.diff_tool.as_ref();
     let count =
-        scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose).await?;
+        scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose, config.personality).await?;
 
     if count == 0 {
         println!("No '{alias}:' markers found.");
@@ -400,7 +416,7 @@ pub async fn cmd_watch(
     let diff_tool = config.diff_tool.as_ref();
 
     // Initial scan.
-    let _ = scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose).await;
+    let _ = scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose, config.personality).await;
 
     loop {
         match rx.recv() {
@@ -408,7 +424,7 @@ pub async fn cmd_watch(
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 while rx.try_recv().is_ok() {}
                 if let Err(e) =
-                    scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose)
+                    scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose, config.personality)
                         .await
                 {
                     eprintln!("Watch error: {e:?}");

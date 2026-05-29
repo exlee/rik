@@ -32,6 +32,9 @@ pub struct Config {
     /// When unset, auto-detects difft, delta, or diff.
     #[serde(default)]
     pub diff_tool: Option<Vec<String>>,
+    /// Enable personality mode. When enabled, Rik will be more chatty about his work.
+    #[serde(default)]
+    pub personality: bool,
 }
 
 #[derive(Deserialize, Debug)]
