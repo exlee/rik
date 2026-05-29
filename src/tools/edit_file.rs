@@ -46,8 +46,8 @@ pub struct EditFileTool {
     /// The file this tool is allowed to edit (set at construction time).
     pub target_path: String,
     /// Marker spans as `(1-based start line, 1-based end line)` tuples.
-    /// An edit is allowed when its line range overlaps with at least one
-    /// expanded span `[start - MARKER_RADIUS, end + MARKER_RADIUS]`.
+    /// An edit is allowed when either its start line or end line falls
+    /// within `MARKER_RADIUS` lines of any line inside a marker span.
     pub marker_spans: Vec<(usize, usize)>,
 }
 
@@ -113,11 +113,12 @@ impl Tool for EditFileTool {
             (Some(pos), _) => {
                 // --- Line scope restriction ---
                 if !self.is_edit_near_marker(&content, pos, &args.old_text) {
-                    return Err(EditFileError(
-                        "Edit rejected: old_text is not within 7 lines of any marker. \
-                         Edits must be close to a marker line."
-                            .to_string(),
-                    ));
+                    return Err(EditFileError(format!(
+                        "Edit rejected: neither the start nor end line of old_text \
+                         is within {} lines of any marker. \
+                         Edits must anchor near a marker line.",
+                        MARKER_RADIUS,
+                    )));
                 }
 
                 let mut new_content = String::with_capacity(
@@ -141,17 +142,29 @@ impl Tool for EditFileTool {
 }
 
 impl EditFileTool {
-    /// Check whether the edit starting at byte offset `pos` with text `old_text`
-    /// falls within `MARKER_RADIUS` lines of at least one marker span.
+    /// Check whether the edit's start or end line falls within `MARKER_RADIUS`
+    /// lines of any line inside at least one marker span.
+    ///
+    /// This mirrors the Prolog rule:
+    ///   possible(edit(Q,P), marker(X,Y)) :-
+    ///       between(X,Y,Z), (in_range(Z,Q) ; in_range(Z,P)).
+    /// where `in_range(Z, V)` means V ∈ [Z − max_offset, Z + max_offset].
     fn is_edit_near_marker(&self, content: &str, pos: usize, old_text: &str) -> bool {
         let edit_start_line = byte_offset_to_line(content, pos);
-        let edit_end_line = byte_offset_to_line(content, pos + old_text.len());
+        // Line of the last character of the matched text.
+        let edit_end_line = byte_offset_to_line(content, pos + old_text.len().saturating_sub(1));
 
         for &(start, end) in &self.marker_spans {
-            let lo = start.saturating_sub(MARKER_RADIUS).max(1);
-            let hi = end + MARKER_RADIUS;
-            if edit_start_line <= hi && edit_end_line >= lo {
-                return true;
+            // Iterate every line Z within the marker span [start, end]
+            for z in start..=end {
+                let lo = z.saturating_sub(MARKER_RADIUS);
+                let hi = z + MARKER_RADIUS;
+                // Check if either endpoint of the edit is within [lo, hi]
+                if (edit_start_line >= lo && edit_start_line <= hi)
+                    || (edit_end_line >= lo && edit_end_line <= hi)
+                {
+                    return true;
+                }
             }
         }
         false
@@ -337,7 +350,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("not within 7 lines of any marker"),
+            err.contains("neither the start nor end line"),
             "Expected line-range rejection, got: {err}"
         );
         assert_eq!(
@@ -421,5 +434,84 @@ mod tests {
         assert_eq!(byte_offset_to_line(content, 4), 2);
         assert_eq!(byte_offset_to_line(content, 8), 3);
         assert_eq!(byte_offset_to_line(content, 14), 4);
+    }
+
+    #[tokio::test]
+    async fn test_wide_edit_spanning_marker_rejected() -> anyhow::Result<()> {
+        // Marker on line 10. Edit spans lines 1-20.
+        // The middle of the edit crosses the marker, but neither endpoint
+        // (line 1 nor line 20) is within MARKER_RADIUS=7 of line 10.
+        // Old overlap logic would allow this; Prolog rule rejects it.
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let lines: Vec<String> = (1..=25).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&file_path, lines.join(""))?;
+
+        let tool = EditFileTool {
+            target_path: file_path.display().to_string(),
+            marker_spans: vec![(10, 10)],
+        };
+        let result = tool
+            .call(EditFileArgs {
+                old_text: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\n".into(),
+                new_text: "replaced\n".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("neither the start nor end line"),
+            "Expected rejection when both endpoints are far from marker, got: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_endpoint_near_marker_allowed() -> anyhow::Result<()> {
+        // Marker on line 10. Edit spans lines 3-20.
+        // Endpoint Q=line 3 is within [10-7, 10+7]=[3,17], so allowed.
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let lines: Vec<String> = (1..=25).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&file_path, lines.join(""))?;
+
+        let tool = EditFileTool {
+            target_path: file_path.display().to_string(),
+            marker_spans: vec![(10, 10)],
+        };
+        tool.call(EditFileArgs {
+            old_text: "line 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\n".into(),
+            new_text: "replaced\n".into(),
+        })
+        .await?;
+
+        let content = std::fs::read_to_string(&file_path)?;
+        assert!(content.contains("replaced"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_end_point_near_marker_allowed() -> anyhow::Result<()> {
+        // Marker on line 10. Edit spans lines 1-17.
+        // Start Q=1 is NOT in [3,17], but end P=17 IS in [3,17]. Allowed.
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let lines: Vec<String> = (1..=25).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&file_path, lines.join(""))?;
+
+        let tool = EditFileTool {
+            target_path: file_path.display().to_string(),
+            marker_spans: vec![(10, 10)],
+        };
+        tool.call(EditFileArgs {
+            old_text: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\n".into(),
+            new_text: "replaced\n".into(),
+        })
+        .await?;
+
+        let content = std::fs::read_to_string(&file_path)?;
+        assert!(content.contains("replaced"));
+        Ok(())
     }
 }
