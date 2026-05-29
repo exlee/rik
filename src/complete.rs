@@ -200,7 +200,7 @@ where
         .preamble(&preamble)
         .tool(tools::ReadFileTool)
         .tool(tools::EditFileTool {
-            allowed_path: file_path.display().to_string(),
+            target_path: file_path.display().to_string(),
             marker_spans: markers.iter().map(|(s, e, _)| (*s, *e)).collect(),
         })
         .tool(tools::ListFilesTool)

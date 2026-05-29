@@ -15,8 +15,6 @@ const MARKER_RADIUS: usize = 7;
 /// Arguments for the edit_file tool.
 #[derive(Deserialize)]
 pub struct EditFileArgs {
-    /// Path of the file to edit.
-    pub file_path: String,
     /// Exact text to find in the file. Must be unique.
     pub old_text: String,
     /// Replacement text.
@@ -34,20 +32,19 @@ impl From<std::io::Error> for EditFileError {
     }
 }
 
-/// A tool that performs exact text replacement in an existing file.
+/// A tool that performs exact text replacement in the target file.
 ///
-/// Finds `old_text` in the file and replaces it with `new_text`.
-/// The `old_text` must match exactly one occurrence -- zero or multiple matches
-/// are errors.
+/// Finds `old_text` and replaces it with `new_text`. The `old_text` must match
+/// exactly one occurrence.
 ///
-/// Two restrictions are enforced:
-/// - **File scope**: only `allowed_path` may be edited.
+/// Two restrictions are enforced at the code level:
+/// - **File scope**: the tool always edits `target_path` — no argument needed.
 /// - **Line scope**: the edit must fall within `MARKER_RADIUS` lines of a
 ///   marker span recorded in `marker_spans`.
 #[derive(Deserialize, Serialize)]
 pub struct EditFileTool {
-    /// Only this file path may be edited.
-    pub allowed_path: String,
+    /// The file this tool is allowed to edit (set at construction time).
+    pub target_path: String,
     /// Marker spans as `(1-based start line, 1-based end line)` tuples.
     /// An edit is allowed when its line range overlaps with at least one
     /// expanded span `[start - MARKER_RADIUS, end + MARKER_RADIUS]`.
@@ -62,21 +59,19 @@ impl Tool for EditFileTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
+        let desc = format!(
+            "Edit {} by replacing exact text. \
+             old_text must match exactly one occurrence in the file. \
+             That text is replaced with new_text. \
+             Only this file may be edited and edits must be within {} lines of a marker.",
+            self.target_path, MARKER_RADIUS,
+        );
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Edit the target file by replacing exact text. \
-                          old_text must match exactly one occurrence. \
-                          That text is replaced with new_text. \
-                          Edits are restricted to the target file only, \
-                          and must be within 7 lines of a marker."
-                .to_string(),
+            description: desc,
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path of the file to edit (must be the target file)"
-                    },
                     "old_text": {
                         "type": "string",
                         "description": "Exact text to find in the file (must be unique)"
@@ -86,28 +81,18 @@ impl Tool for EditFileTool {
                         "description": "Replacement text"
                     }
                 },
-                "required": ["file_path", "old_text", "new_text"]
+                "required": ["old_text", "new_text"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = Path::new(&args.file_path);
+        let path = Path::new(&self.target_path);
 
         if !path.exists() {
-            return Err(EditFileError(format!("File not found: {}", args.file_path)));
-        }
-
-        // --- File scope restriction ---
-        let canonical_requested = std::fs::canonicalize(path)
-            .map_err(|e| EditFileError(format!("Cannot resolve path: {e}")))?;
-        let canonical_allowed = Path::new(&self.allowed_path).canonicalize()
-            .map_err(|e| EditFileError(format!("Cannot resolve allowed path: {e}")))?;
-        if canonical_requested != canonical_allowed {
             return Err(EditFileError(format!(
-                "Edit rejected: edits are only allowed in {}. Got: {}",
-                canonical_allowed.display(),
-                canonical_requested.display(),
+                "File not found: {}",
+                self.target_path
             )));
         }
 
@@ -119,7 +104,7 @@ impl Tool for EditFileTool {
         match (first, last) {
             (None, _) => Err(EditFileError(format!(
                 "old_text not found in file: {}",
-                args.file_path
+                self.target_path
             ))),
             (Some(a), Some(b)) if a != b => Err(EditFileError(format!(
                 "old_text matches {} locations in file -- must be unique",
@@ -145,10 +130,10 @@ impl Tool for EditFileTool {
                 std::fs::write(path, &new_content)?;
                 Ok(format!(
                     "[edit_file] path={} input_len={} output_len={}\nEdited {}",
-                    args.file_path,
+                    self.target_path,
                     args.old_text.len(),
                     args.new_text.len(),
-                    args.file_path
+                    self.target_path
                 ))
             }
         }
@@ -159,15 +144,12 @@ impl EditFileTool {
     /// Check whether the edit starting at byte offset `pos` with text `old_text`
     /// falls within `MARKER_RADIUS` lines of at least one marker span.
     fn is_edit_near_marker(&self, content: &str, pos: usize, old_text: &str) -> bool {
-        // Compute 1-based line number for the start of old_text.
         let edit_start_line = byte_offset_to_line(content, pos);
-        // Compute 1-based line number for the end of old_text.
         let edit_end_line = byte_offset_to_line(content, pos + old_text.len());
 
         for &(start, end) in &self.marker_spans {
             let lo = start.saturating_sub(MARKER_RADIUS).max(1);
             let hi = end + MARKER_RADIUS;
-            // Edit range overlaps with expanded marker range?
             if edit_start_line <= hi && edit_end_line >= lo {
                 return true;
             }
@@ -190,11 +172,10 @@ fn byte_offset_to_line(content: &str, offset: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// Helper to build a tool with the same file as allowed path and a single
-    /// marker span around `marker_line`.
+    /// Helper to build a tool targeting `file_path` with a single marker span.
     fn make_tool(file_path: &std::path::Path, marker_line: usize) -> EditFileTool {
         EditFileTool {
-            allowed_path: file_path.display().to_string(),
+            target_path: file_path.display().to_string(),
             marker_spans: vec![(marker_line, marker_line)],
         }
     }
@@ -207,7 +188,6 @@ mod tests {
 
         let tool = make_tool(&file_path, 2);
         tool.call(EditFileArgs {
-            file_path: file_path.display().to_string(),
             old_text: "rik: write a poem".into(),
             new_text: "Roses are red\nViolets are blue".into(),
         })
@@ -221,12 +201,11 @@ mod tests {
     #[tokio::test]
     async fn test_edit_file_not_found() {
         let tool = EditFileTool {
-            allowed_path: "/nonexistent".to_string(),
+            target_path: "/nonexistent".to_string(),
             marker_spans: vec![(1, 1)],
         };
         let result = tool
             .call(EditFileArgs {
-                file_path: "/nonexistent".to_string(),
                 old_text: "x".into(),
                 new_text: "y".into(),
             })
@@ -244,7 +223,6 @@ mod tests {
         let tool = make_tool(&file_path, 1);
         let result = tool
             .call(EditFileArgs {
-                file_path: file_path.display().to_string(),
                 old_text: "not here".into(),
                 new_text: "x".into(),
             })
@@ -263,7 +241,6 @@ mod tests {
         let tool = make_tool(&file_path, 1);
         let result = tool
             .call(EditFileArgs {
-                file_path: file_path.display().to_string(),
                 old_text: "abc".into(),
                 new_text: "def".into(),
             })
@@ -285,7 +262,6 @@ mod tests {
         let tool = make_tool(&file_path, 1);
         let result = tool
             .call(EditFileArgs {
-                file_path: file_path.display().to_string(),
                 old_text: old_text.into(),
                 new_text: new_text.into(),
             })
@@ -317,58 +293,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_edit_file_rejected_wrong_path() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let allowed_file = dir.path().join("allowed.txt");
-        let other_file = dir.path().join("other.txt");
-        std::fs::write(&allowed_file, "allowed content\n")?;
-        std::fs::write(&other_file, "other content\n")?;
-
-        let tool = EditFileTool {
-            allowed_path: allowed_file.display().to_string(),
-            marker_spans: vec![(1, 1)],
-        };
-        let result = tool
-            .call(EditFileArgs {
-                file_path: other_file.display().to_string(),
-                old_text: "other content".into(),
-                new_text: "hacked".into(),
-            })
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Edit rejected"), "Expected 'Edit rejected', got: {err}");
-        assert_eq!(std::fs::read_to_string(&other_file)?, "other content\n");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_edit_file_allowed_path_permitted() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let allowed_file = dir.path().join("allowed.txt");
-        std::fs::write(&allowed_file, "hello world\n")?;
-
-        let tool = EditFileTool {
-            allowed_path: allowed_file.display().to_string(),
-            marker_spans: vec![(1, 1)],
-        };
-        tool.call(EditFileArgs {
-            file_path: allowed_file.display().to_string(),
-            old_text: "hello world".into(),
-            new_text: "goodbye".into(),
-        })
-        .await?;
-
-        assert_eq!(std::fs::read_to_string(&allowed_file)?, "goodbye\n");
-        Ok(())
-    }
-
-    // -------------------------------------------------------------------
-    // Line-range restriction tests
-    // -------------------------------------------------------------------
-
-    #[tokio::test]
     async fn test_edit_near_marker_allowed() -> anyhow::Result<()> {
         // Marker on line 10, edit on line 8 — within radius of 7.
         let dir = tempfile::tempdir()?;
@@ -377,11 +301,10 @@ mod tests {
         std::fs::write(&file_path, lines.join("\n"))?;
 
         let tool = EditFileTool {
-            allowed_path: file_path.display().to_string(),
+            target_path: file_path.display().to_string(),
             marker_spans: vec![(10, 10)],
         };
         tool.call(EditFileArgs {
-            file_path: file_path.display().to_string(),
             old_text: "line 8".into(),
             new_text: "edited".into(),
         })
@@ -401,12 +324,11 @@ mod tests {
         std::fs::write(&file_path, lines.join("\n"))?;
 
         let tool = EditFileTool {
-            allowed_path: file_path.display().to_string(),
+            target_path: file_path.display().to_string(),
             marker_spans: vec![(20, 20)],
         };
         let result = tool
             .call(EditFileArgs {
-                file_path: file_path.display().to_string(),
                 old_text: "line 5".into(),
                 new_text: "hacked".into(),
             })
@@ -418,7 +340,10 @@ mod tests {
             err.contains("not within 7 lines of any marker"),
             "Expected line-range rejection, got: {err}"
         );
-        assert_eq!(std::fs::read_to_string(&file_path)?.lines().nth(4).unwrap(), "line 5");
+        assert_eq!(
+            std::fs::read_to_string(&file_path)?.lines().nth(4).unwrap(),
+            "line 5"
+        );
         Ok(())
     }
 
@@ -431,11 +356,10 @@ mod tests {
         std::fs::write(&file_path, lines.join("\n"))?;
 
         let tool = EditFileTool {
-            allowed_path: file_path.display().to_string(),
+            target_path: file_path.display().to_string(),
             marker_spans: vec![(10, 15)],
         };
         tool.call(EditFileArgs {
-            file_path: file_path.display().to_string(),
             old_text: "line 9".into(),
             new_text: "edited".into(),
         })
@@ -456,11 +380,10 @@ mod tests {
         std::fs::write(&file_path, lines.join("\n"))?;
 
         let tool = EditFileTool {
-            allowed_path: file_path.display().to_string(),
+            target_path: file_path.display().to_string(),
             marker_spans: vec![(5, 5), (25, 25)],
         };
         tool.call(EditFileArgs {
-            file_path: file_path.display().to_string(),
             old_text: "line 28".into(),
             new_text: "edited".into(),
         })
@@ -471,12 +394,32 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_definition_includes_file_path() -> anyhow::Result<()> {
+        let tool = EditFileTool {
+            target_path: "src/main.rs".to_string(),
+            marker_spans: vec![(10, 10)],
+        };
+        let def = tool.definition(String::new()).await;
+        assert!(def.description.contains("src/main.rs"));
+        assert!(!def.description.contains("TARGET_PATH"));
+        // file_path must NOT be a parameter
+        let params = serde_json::to_string(&def.parameters)?;
+        assert!(
+            !params.contains("file_path"),
+            "file_path should not appear in parameters, got: {params}"
+        );
+        assert!(params.contains("old_text"));
+        assert!(params.contains("new_text"));
+        Ok(())
+    }
+
     #[test]
     fn test_byte_offset_to_line() {
         let content = "one\ntwo\nthree\n";
-        assert_eq!(byte_offset_to_line(content, 0), 1);  // "o" in "one"
-        assert_eq!(byte_offset_to_line(content, 4), 2);  // "t" in "two"
-        assert_eq!(byte_offset_to_line(content, 8), 3);  // "t" in "three"
-        assert_eq!(byte_offset_to_line(content, 14), 4); // past end of last line
+        assert_eq!(byte_offset_to_line(content, 0), 1);
+        assert_eq!(byte_offset_to_line(content, 4), 2);
+        assert_eq!(byte_offset_to_line(content, 8), 3);
+        assert_eq!(byte_offset_to_line(content, 14), 4);
     }
 }
