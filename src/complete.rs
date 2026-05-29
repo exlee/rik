@@ -199,7 +199,9 @@ where
         .agent(model_name)
         .preamble(&preamble)
         .tool(tools::ReadFileTool)
-        .tool(tools::EditFileTool)
+        .tool(tools::EditFileTool {
+            allowed_path: Some(file_path.display().to_string()),
+        })
         .tool(tools::ListFilesTool)
         .default_max_turns(20);
     if personality {

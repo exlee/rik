@@ -36,8 +36,13 @@ impl From<std::io::Error> for EditFileError {
 /// Finds `old_text` in the file and replaces it with `new_text`.
 /// The `old_text` must match exactly one occurrence -- zero or multiple matches
 /// are errors.
+///
+/// If `allowed_path` is `Some(...)`, edits are restricted to that file only.
 #[derive(Deserialize, Serialize)]
-pub struct EditFileTool;
+pub struct EditFileTool {
+    /// If set, only this file path may be edited.
+    pub allowed_path: Option<String>,
+}
 
 impl Tool for EditFileTool {
     const NAME: &'static str = "edit_file";
@@ -80,6 +85,21 @@ impl Tool for EditFileTool {
 
         if !path.exists() {
             return Err(EditFileError(format!("File not found: {}", args.file_path)));
+        }
+
+        // Enforce file scope restriction.
+        if let Some(ref allowed) = self.allowed_path {
+            let canonical_requested = std::fs::canonicalize(path)
+                .map_err(|e| EditFileError(format!("Cannot resolve path: {e}")))?;
+            let canonical_allowed = Path::new(allowed).canonicalize()
+                .map_err(|e| EditFileError(format!("Cannot resolve allowed path: {e}")))?;
+            if canonical_requested != canonical_allowed {
+                return Err(EditFileError(format!(
+                    "Edit rejected: edits are only allowed in {}. Got: {}",
+                    canonical_allowed.display(),
+                    canonical_requested.display(),
+                )));
+            }
         }
 
         let content = std::fs::read_to_string(path)?;
@@ -127,7 +147,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "before\nrik: write a poem\nafter\n")?;
 
-        let tool = EditFileTool;
+        let tool = EditFileTool { allowed_path: None };
         tool.call(EditFileArgs {
             file_path: file_path.display().to_string(),
             old_text: "rik: write a poem".into(),
@@ -142,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_not_found() {
-        let tool = EditFileTool;
+        let tool = EditFileTool { allowed_path: None };
         let result = tool
             .call(EditFileArgs {
                 file_path: "/nonexistent".to_string(),
@@ -160,7 +180,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello world\n")?;
 
-        let tool = EditFileTool;
+        let tool = EditFileTool { allowed_path: None };
         let result = tool
             .call(EditFileArgs {
                 file_path: file_path.display().to_string(),
@@ -179,7 +199,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "abc xyz abc\n")?;
 
-        let tool = EditFileTool;
+        let tool = EditFileTool { allowed_path: None };
         let result = tool
             .call(EditFileArgs {
                 file_path: file_path.display().to_string(),
@@ -201,7 +221,7 @@ mod tests {
         let old_text = "bar";
         let new_text = "qux";
 
-        let tool = EditFileTool;
+        let tool = EditFileTool { allowed_path: None };
         let result = tool
             .call(EditFileArgs {
                 file_path: file_path.display().to_string(),
@@ -232,6 +252,53 @@ mod tests {
             new_text.len(),
             result
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_rejected_wrong_path() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let allowed_file = dir.path().join("allowed.txt");
+        let other_file = dir.path().join("other.txt");
+        std::fs::write(&allowed_file, "allowed content\n")?;
+        std::fs::write(&other_file, "other content\n")?;
+
+        let tool = EditFileTool {
+            allowed_path: Some(allowed_file.display().to_string()),
+        };
+        let result = tool
+            .call(EditFileArgs {
+                file_path: other_file.display().to_string(),
+                old_text: "other content".into(),
+                new_text: "hacked".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Edit rejected"), "Expected 'Edit rejected', got: {err}");
+        // other_file must be unchanged
+        assert_eq!(std::fs::read_to_string(&other_file)?, "other content\n");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_allowed_path_permitted() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let allowed_file = dir.path().join("allowed.txt");
+        std::fs::write(&allowed_file, "hello world\n")?;
+
+        let tool = EditFileTool {
+            allowed_path: Some(allowed_file.display().to_string()),
+        };
+        tool.call(EditFileArgs {
+            file_path: allowed_file.display().to_string(),
+            old_text: "hello world".into(),
+            new_text: "goodbye".into(),
+        })
+        .await?;
+
+        assert_eq!(std::fs::read_to_string(&allowed_file)?, "goodbye\n");
         Ok(())
     }
 }
