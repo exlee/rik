@@ -156,7 +156,7 @@ where
         file_path.display()
     );
 
-    for (line_no, query) in &markers {
+    for (line_no, _end, query) in &markers {
         println!("  [line {line_no}] Query: {query}");
     }
 
@@ -164,7 +164,7 @@ where
     let file_display = file_path.display().to_string();
     let markers_block = markers
         .iter()
-        .map(|(line_no, query)| {
+        .map(|(line_no, _end, query)| {
             format!(
                 "Marker at line {line_no}: {alias}: {query}\n\
                  Surrounding context:\n{}",
@@ -201,6 +201,7 @@ where
         .tool(tools::ReadFileTool)
         .tool(tools::EditFileTool {
             allowed_path: file_path.display().to_string(),
+            marker_spans: markers.iter().map(|(s, e, _)| (*s, *e)).collect(),
         })
         .tool(tools::ListFilesTool)
         .default_max_turns(20);
