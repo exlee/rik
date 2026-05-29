@@ -37,11 +37,11 @@ impl From<std::io::Error> for EditFileError {
 /// The `old_text` must match exactly one occurrence -- zero or multiple matches
 /// are errors.
 ///
-/// If `allowed_path` is `Some(...)`, edits are restricted to that file only.
+/// Edits are restricted to `allowed_path` only.
 #[derive(Deserialize, Serialize)]
 pub struct EditFileTool {
-    /// If set, only this file path may be edited.
-    pub allowed_path: Option<String>,
+    /// Only this file path may be edited.
+    pub allowed_path: String,
 }
 
 impl Tool for EditFileTool {
@@ -88,18 +88,16 @@ impl Tool for EditFileTool {
         }
 
         // Enforce file scope restriction.
-        if let Some(ref allowed) = self.allowed_path {
-            let canonical_requested = std::fs::canonicalize(path)
-                .map_err(|e| EditFileError(format!("Cannot resolve path: {e}")))?;
-            let canonical_allowed = Path::new(allowed).canonicalize()
-                .map_err(|e| EditFileError(format!("Cannot resolve allowed path: {e}")))?;
-            if canonical_requested != canonical_allowed {
-                return Err(EditFileError(format!(
-                    "Edit rejected: edits are only allowed in {}. Got: {}",
-                    canonical_allowed.display(),
-                    canonical_requested.display(),
-                )));
-            }
+        let canonical_requested = std::fs::canonicalize(path)
+            .map_err(|e| EditFileError(format!("Cannot resolve path: {e}")))?;
+        let canonical_allowed = Path::new(&self.allowed_path).canonicalize()
+            .map_err(|e| EditFileError(format!("Cannot resolve allowed path: {e}")))?;
+        if canonical_requested != canonical_allowed {
+            return Err(EditFileError(format!(
+                "Edit rejected: edits are only allowed in {}. Got: {}",
+                canonical_allowed.display(),
+                canonical_requested.display(),
+            )));
         }
 
         let content = std::fs::read_to_string(path)?;
@@ -147,7 +145,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "before\nrik: write a poem\nafter\n")?;
 
-        let tool = EditFileTool { allowed_path: None };
+        let tool = EditFileTool { allowed_path: file_path.display().to_string() };
         tool.call(EditFileArgs {
             file_path: file_path.display().to_string(),
             old_text: "rik: write a poem".into(),
@@ -162,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_not_found() {
-        let tool = EditFileTool { allowed_path: None };
+        let tool = EditFileTool { allowed_path: "/nonexistent".to_string() };
         let result = tool
             .call(EditFileArgs {
                 file_path: "/nonexistent".to_string(),
@@ -180,7 +178,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello world\n")?;
 
-        let tool = EditFileTool { allowed_path: None };
+        let tool = EditFileTool { allowed_path: file_path.display().to_string() };
         let result = tool
             .call(EditFileArgs {
                 file_path: file_path.display().to_string(),
@@ -199,7 +197,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "abc xyz abc\n")?;
 
-        let tool = EditFileTool { allowed_path: None };
+        let tool = EditFileTool { allowed_path: file_path.display().to_string() };
         let result = tool
             .call(EditFileArgs {
                 file_path: file_path.display().to_string(),
@@ -221,7 +219,7 @@ mod tests {
         let old_text = "bar";
         let new_text = "qux";
 
-        let tool = EditFileTool { allowed_path: None };
+        let tool = EditFileTool { allowed_path: file_path.display().to_string() };
         let result = tool
             .call(EditFileArgs {
                 file_path: file_path.display().to_string(),
@@ -264,7 +262,7 @@ mod tests {
         std::fs::write(&other_file, "other content\n")?;
 
         let tool = EditFileTool {
-            allowed_path: Some(allowed_file.display().to_string()),
+            allowed_path: allowed_file.display().to_string(),
         };
         let result = tool
             .call(EditFileArgs {
@@ -289,7 +287,7 @@ mod tests {
         std::fs::write(&allowed_file, "hello world\n")?;
 
         let tool = EditFileTool {
-            allowed_path: Some(allowed_file.display().to_string()),
+            allowed_path: allowed_file.display().to_string(),
         };
         tool.call(EditFileArgs {
             file_path: allowed_file.display().to_string(),

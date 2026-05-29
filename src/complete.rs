@@ -200,7 +200,7 @@ where
         .preamble(&preamble)
         .tool(tools::ReadFileTool)
         .tool(tools::EditFileTool {
-            allowed_path: Some(file_path.display().to_string()),
+            allowed_path: file_path.display().to_string(),
         })
         .tool(tools::ListFilesTool)
         .default_max_turns(20);
