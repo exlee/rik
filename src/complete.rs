@@ -263,7 +263,7 @@ where
                     is_reasoning = false;
                     print!("\n    \x1b[0m");
                 }
-                println!("    [tool: {}]", tool_call.function.name);
+                println!("    [tool: {}] {}", tool_call.function.name, tool_call.function.arguments.to_string());
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
                 if is_reasoning && verbose {
