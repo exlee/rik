@@ -1,3 +1,5 @@
+use std::{str::Lines, sync::OnceLock};
+
 use clap::Parser;
 
 mod complete;
@@ -46,10 +48,11 @@ async fn main() -> anyhow::Result<()> {
 
 fn print_motd(alias: &str) {
     let motd = include_str!("../MOTD.txt");
-    println!("{motd}");
-    if alias != "rik" {
-        println!("(but call me {alias}!)\n");
+    let alias = if alias != "rik" {
+        format!(" (call me \"{alias}\"!)\n")
     } else {
-        println!();
-    }
+        String::new()
+    };
+
+    println!("{}", motd.replace("{ALIAS}", &alias));
 }
