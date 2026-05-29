@@ -1,3 +1,8 @@
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
 // ---------------------------------------------------------------------------
 // Mood enum
 // ---------------------------------------------------------------------------
@@ -13,6 +18,63 @@ pub enum Mood {
     Angry,
     Grim,
     Tired,
+}
+
+// ---------------------------------------------------------------------------
+// Personality tool
+// ---------------------------------------------------------------------------
+
+/// Arguments for the personality tool.
+#[derive(Deserialize)]
+pub struct PersonalityArgs {
+    /// A short comment expressing personality (up to 5 words).
+    pub message: String,
+}
+
+/// Error type for the personality tool.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct PersonalityError(String);
+
+/// A tool that lets the agent express personality via a short comment.
+#[derive(Deserialize, Serialize)]
+pub struct Personality;
+
+impl Tool for Personality {
+    const NAME: &'static str = "personality";
+
+    type Error = PersonalityError;
+    type Args = PersonalityArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Express personality with a short comment (up to 5 words)."
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "A short comment expressing personality (up to 5 words)"
+                    }
+                },
+                "required": ["message"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let words: Vec<&str> = args.message.split_whitespace().collect();
+        if words.len() > 5 {
+            return Err(PersonalityError(format!(
+                "Message must be up to 5 words, got {} words",
+                words.len()
+            )));
+        }
+        Ok(format!("[personality] {}", args.message))
+    }
 }
 
 // ---------------------------------------------------------------------------

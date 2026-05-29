@@ -375,6 +375,51 @@ fn common_ancestor(a: &std::path::Path, b: &std::path::Path) -> std::path::PathB
     common
 }
 
+/// Compute a lightweight hash of file contents for change detection.
+fn content_hash(path: &std::path::Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    Some(hasher.finish())
+}
+
+/// Snapshot hashes of all files matching the glob pattern.
+fn snapshot_hashes(pattern: &str) -> std::collections::HashMap<std::path::PathBuf, u64> {
+    let mut hashes = std::collections::HashMap::new();
+    if let Ok(files) = crate::helpers::expand_glob(pattern) {
+        for path in files {
+            if let Some(h) = content_hash(&path) {
+                hashes.insert(path, h);
+            }
+        }
+    }
+    hashes
+}
+
+/// Check whether any file matching the glob has changed since `prev`.
+/// Returns true if at least one file has a different hash or is new.
+fn files_changed(pattern: &str, prev: &std::collections::HashMap<std::path::PathBuf, u64>) -> bool {
+    if let Ok(files) = crate::helpers::expand_glob(pattern) {
+        for path in &files {
+            match content_hash(path) {
+                Some(h) => match prev.get(path) {
+                    Some(&prev_h) if prev_h == h => {}
+                    _ => return true,
+                },
+                None => return true,
+            }
+        }
+        // Also detect files that were removed.
+        for prev_path in prev.keys() {
+            if !files.contains(prev_path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Watch mode: continuously monitor files for new/changed markers.
 pub async fn cmd_watch(
     config: &Config,
@@ -415,20 +460,28 @@ pub async fn cmd_watch(
 
     let diff_tool = config.diff_tool.as_ref();
 
-    // Initial scan.
+    // Initial scan — always run, then snapshot hashes.
     let _ = scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose, config.personality).await;
+    let mut prev_hashes = snapshot_hashes(&pattern);
 
     loop {
         match rx.recv() {
             Ok(Ok(_event)) => {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 while rx.try_recv().is_ok() {}
+
+                // Skip processing if no file content has actually changed.
+                if !files_changed(&pattern, &prev_hashes) {
+                    continue;
+                }
+
                 if let Err(e) =
                     scan_and_complete_dispatch(&config.model, alias, diff_tool, &pattern, verbose, config.personality)
                         .await
                 {
                     eprintln!("Watch error: {e:?}");
                 }
+                prev_hashes = snapshot_hashes(&pattern);
             }
             Ok(Err(e)) => {
                 eprintln!("Watch error: {e}");
