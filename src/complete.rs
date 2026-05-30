@@ -303,7 +303,8 @@ where
             alias: alias.to_string(),
         })
         .tool(tools::ListFilesTool)
-        .default_max_turns(20);
+        .tool(tools::WriteFileTool)
+        .default_max_turns(30);
 
     let agent = agent_builder.build();
 
