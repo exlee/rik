@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-30
+
+### Added
+- **`write_file` tool** — agents can now create new files (refuses to overwrite existing ones)
+- Integration tests for `edit_file` with multi-byte (emoji) content
+
+### Changed
+- Personality adjustments
+- Better `write_file` output formatting
+
+### Fixed
+- Fix path traversal vulnerability in `validate_relative_path` for non-existent paths
+- Fix: guarantee all markers are removed after agent completes, not just context markers
+- Make keyboard Space-bar polling Unix-only (`termios` unavailable on Windows); no-op on non-Unix platforms
+
 ## [0.2.0] - 2026-05-30
 
 ### Added

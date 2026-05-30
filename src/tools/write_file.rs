@@ -74,9 +74,7 @@ impl Tool for WriteFileTool {
         let path = Path::new(&rel);
 
         if path.exists() {
-            return Err(WriteFileError(format!(
-                "File already exists: {rel}"
-            )));
+            return Err(WriteFileError(format!("File already exists: {rel}")));
         }
 
         if let Some(parent) = path.parent() {
@@ -165,10 +163,12 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Absolute paths are not allowed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Absolute paths are not allowed")
+        );
     }
 
     #[tokio::test]

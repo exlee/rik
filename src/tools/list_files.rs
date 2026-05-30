@@ -71,15 +71,11 @@ impl Tool for ListFilesTool {
                 .map_err(|e| ListFilesError(e.to_string()))?
                 .join(root)
         } else {
-            return Err(ListFilesError(
-                "Absolute paths are not allowed".to_string(),
-            ));
+            return Err(ListFilesError("Absolute paths are not allowed".to_string()));
         };
 
         if !root.exists() {
-            return Err(ListFilesError(format!(
-                "Directory not found: {dir_arg}"
-            )));
+            return Err(ListFilesError(format!("Directory not found: {dir_arg}")));
         }
 
         let mut builder = ignore::WalkBuilder::new(&root);
@@ -100,8 +96,7 @@ impl Tool for ListFilesTool {
             builder.overrides(glob);
         }
 
-        let cwd = std::env::current_dir()
-            .map_err(|e| ListFilesError(e.to_string()))?;
+        let cwd = std::env::current_dir().map_err(|e| ListFilesError(e.to_string()))?;
         let mut paths: Vec<String> = Vec::new();
         for entry in builder.build().filter_map(|e| e.ok()) {
             if entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -240,10 +235,12 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Absolute paths are not allowed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Absolute paths are not allowed")
+        );
     }
 
     #[tokio::test]

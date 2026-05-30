@@ -211,10 +211,7 @@ pub fn validate_relative_path(raw: &str) -> Result<String> {
     // Reject any path component that escapes upwards.
     for component in path.components() {
         if component == std::path::Component::ParentDir {
-            anyhow::bail!(
-                "Path escapes current directory (contains '..'): {}",
-                raw
-            );
+            anyhow::bail!("Path escapes current directory (contains '..'): {}", raw);
         }
     }
 

@@ -189,11 +189,7 @@ fn byte_offset_to_line(content: &str, offset: usize) -> usize {
     let offset = offset.min(content.len());
     // Round down to the nearest char boundary to avoid panicking inside multi-byte UTF-8.
     let offset = content.floor_char_boundary(offset);
-    content[..offset]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count()
-        + 1
+    content[..offset].chars().filter(|&c| c == '\n').count() + 1
 }
 
 #[cfg(test)]
@@ -386,7 +382,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         let mut lines: Vec<String> = (1..=25).map(|i| format!("line {}", i)).collect();
         // Replace line 10 with opening, add body + close.
-        lines[9] = "rik: [[".to_string();   // line 10
+        lines[9] = "rik: [[".to_string(); // line 10
         lines.insert(10, "some instruction".to_string()); // line 11
         lines.insert(11, "]]".to_string()); // line 12
         std::fs::write(&file_path, lines.join("\n"))?;
@@ -409,7 +405,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test.txt");
         let mut lines: Vec<String> = (1..=30).map(|i| format!("line {}", i)).collect();
-        insert_marker_before(&mut lines, 4);  // marker at line 5
+        insert_marker_before(&mut lines, 4); // marker at line 5
         insert_marker_before(&mut lines, 25); // marker at line 26 (shifted by prior insert)
         std::fs::write(&file_path, lines.join("\n"))?;
 

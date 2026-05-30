@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc, Mutex, OnceLock, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::raii::FileReverter;
 
@@ -16,9 +19,12 @@ fn get() -> &'static Mutex<CleanupHandler> {
 /// Register a reverter so it runs on Ctrl+C.
 /// Keeps a strong Arc — the registry owns the lifetime.
 pub fn register(reverter: Arc<FileReverter>) {
-    get().lock().unwrap().file_reverters.push(Arc::downgrade(&reverter));
+    get()
+        .lock()
+        .unwrap()
+        .file_reverters
+        .push(Arc::downgrade(&reverter));
 }
-
 
 /// Run all registered reverters that haven't marked success, then clear.
 pub fn cleanup() {

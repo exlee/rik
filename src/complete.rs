@@ -10,7 +10,6 @@ use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
 use crate::{cleanup, personality, raii, tools};
 
-
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
 // Each provider has its own concrete Client + CompletionModel types so we can't
@@ -128,10 +127,7 @@ Rules:
 ///
 /// This guarantees that no marker remnants are left in the file after the
 /// agent finishes its work.
-fn remove_remaining_markers(
-    file_path: &std::path::Path,
-    alias: &str,
-) -> anyhow::Result<usize> {
+fn remove_remaining_markers(file_path: &std::path::Path, alias: &str) -> anyhow::Result<usize> {
     let content = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
 
@@ -189,7 +185,12 @@ where
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
 
     let all_markers = crate::markers::find_markers(&content_before, alias);
-    if all_markers.iter().filter(|m| m.kind != MarkerKind::Context).count() == 0 {
+    if all_markers
+        .iter()
+        .filter(|m| m.kind != MarkerKind::Context)
+        .count()
+        == 0
+    {
         return Ok(0);
     }
 
@@ -207,10 +208,12 @@ where
     }
 
     // Separate task markers (agent must act) from context markers (supplementary info).
-    let task_markers: Vec<_> = all_markers.iter()
+    let task_markers: Vec<_> = all_markers
+        .iter()
         .filter(|m| m.kind == MarkerKind::Task)
         .collect();
-    let context_markers: Vec<_> = all_markers.iter()
+    let context_markers: Vec<_> = all_markers
+        .iter()
         .filter(|m| m.kind == MarkerKind::Context)
         .collect();
 
@@ -424,7 +427,7 @@ where
                                 if path.starts_with('/') {
                                     "<rejected>".to_string()
                                 } else {
-                                    format!("{}", path)
+                                    path.to_string()
                                 }
                             } else {
                                 "???".to_string()

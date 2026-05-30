@@ -33,7 +33,6 @@ impl FileReverter {
         Some(arc)
     }
 
-
     /// Mark this edit batch as successful — suppress revert.
     pub fn mark_success(&self) {
         self.success.store(true, Ordering::Relaxed);
@@ -42,10 +41,7 @@ impl FileReverter {
     /// Write backed-up content back to disk only if not yet marked successful.
     pub fn revert_if_needed(&self) {
         if !self.success.load(Ordering::Relaxed) {
-            println!(
-                "[cancel]: reverting {}",
-                self.file_path.display()
-            );
+            println!("[cancel]: reverting {}", self.file_path.display());
             if let Err(e) = std::fs::write(&self.file_path, &self.original_content) {
                 eprintln!(
                     "CRITICAL: failed to revert {}: {}",
@@ -62,5 +58,3 @@ impl Drop for FileReverter {
         self.revert_if_needed();
     }
 }
-
-

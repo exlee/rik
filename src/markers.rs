@@ -29,8 +29,6 @@ fn match_opening_delimiter(text: &str) -> Option<(&'static str, &'static str)> {
     None
 }
 
-
-
 /// Find all markers matching the given alias prefix in content.
 ///
 /// Single-line: `{alias}: <query>` -- everything after the prefix on the same line.
@@ -88,7 +86,8 @@ fn context_inner(query: &str) -> String {
 /// Returns `Vec<FoundMarker>` where line numbers are 1-based.
 /// For single-line markers `start_line == end_line`. For multi-line markers
 /// `end_line` is the closing delimiter line.
-pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {    let prefix = format!("{alias}:");
+pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
+    let prefix = format!("{alias}:");
     let lines: Vec<&str> = content.lines().collect();
     let mut markers = Vec::new();
     let mut i = 0;
@@ -104,8 +103,16 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {    let pre
                 // balanced pairs inside the body don't prematurely close the block.
                 let start_line = i + 1; // 1-based
                 let is_single_char = open.len() == 1;
-                let open_ch = if is_single_char { Some(open.as_bytes()[0]) } else { None };
-                let close_ch = if is_single_char { Some(close.as_bytes()[0]) } else { None };
+                let open_ch = if is_single_char {
+                    Some(open.as_bytes()[0])
+                } else {
+                    None
+                };
+                let close_ch = if is_single_char {
+                    Some(close.as_bytes()[0])
+                } else {
+                    None
+                };
 
                 let mut inner_lines: Vec<String> = Vec::new();
                 let mut found_close = false;
@@ -429,7 +436,8 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiple_multiline_in_file() {
-        let content = "start\nrik: [[\nfirst A\nfirst B\n]]\nmiddle\nrik: ((\nsecond X\nsecond Y\n))\nend";
+        let content =
+            "start\nrik: [[\nfirst A\nfirst B\n]]\nmiddle\nrik: ((\nsecond X\nsecond Y\n))\nend";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 2);
         assert_eq!(markers[0], task(2, 5, "first A\nfirst B"));
@@ -524,7 +532,7 @@ mod tests {
         let content = "rik: [[\nprint: [ [\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], task(1, 3, "print: [ [")); 
+        assert_eq!(markers[0], task(1, 3, "print: [ ["));
     }
 
     #[test]
