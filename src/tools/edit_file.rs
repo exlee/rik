@@ -603,4 +603,96 @@ mod tests {
         assert!(content.contains("fixed_near_b"));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_edit_near_marker_with_emoji_content() -> anyhow::Result<()> {
+        // File has emoji-heavy content. Marker at line 5. Edit on line 6 (within radius).
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let content = "use anyhow::Context;\n\
+            let frog = \"🐸\";\n\
+            let sparkles = \"✨✨✨\";\n\
+            let family = \"👨\u{200d}👩\u{200d}👧\u{200d}👦\";\n\
+            rik: do something\n\
+            let rocket = \"🚀\";\n\
+            let tree = \"🌲\";\n\
+            let waves = \"🌊\";\n";
+        std::fs::write(&file_path, content)?;
+
+        let tool = make_tool(&file_path);
+        tool.call(EditFileArgs {
+            old_text: "let rocket = \"🚀\";".into(),
+            new_text: "let rocket = \"🔥\";".into(),
+        })
+        .await?;
+
+        let result = std::fs::read_to_string(&file_path)?;
+        assert!(result.contains("🔥"));
+        assert!(!result.contains("🚀"));
+        // Other emoji lines untouched
+        assert!(result.contains("🐸"));
+        assert!(result.contains("👨‍👩‍👧‍👦"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_emoji_old_text_near_marker() -> anyhow::Result<()> {
+        // The old_text itself contains multi-byte emoji characters.
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let content = "line 1\nline 2\nrik: replace the logo\nline 4\nlet logo = \"🐸\";\nline 6\n";
+        std::fs::write(&file_path, content)?;
+
+        let tool = make_tool(&file_path);
+        tool.call(EditFileArgs {
+            old_text: "let logo = \"🐸\";".into(),
+            new_text: "let logo = \"🦊\";".into(),
+        })
+        .await?;
+
+        let result = std::fs::read_to_string(&file_path)?;
+        assert!(result.contains("🦊"));
+        assert!(!result.contains("🐸"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_far_from_marker_with_emoji_rejected() -> anyhow::Result<()> {
+        // Emoji content far from the marker — edit must be rejected.
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let content = concat!(
+            "let a = \"🐸🐸🐸\";\n",
+            "let b = \"✨\";\n",
+            "let c = \"🌈\";\n",
+            "let d = \"🎉\";\n",
+            "let e = \"🎃\";\n",
+            "let f = \"👽\";\n",
+            "let g = \"🤖\";\n",
+            "let h = \"🧠\";\n",
+            "let i = \"💡\";\n",
+            "rik: do something\n",
+            "let j = \"🚀\";\n",
+        );
+        std::fs::write(&file_path, content)?;
+
+        let tool = make_tool(&file_path);
+        let result = tool
+            .call(EditFileArgs {
+                old_text: "let a = \"🐸🐸🐸\";".into(),
+                new_text: "let a = \"🐍\";".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("neither the start nor end line"),
+            "Expected rejection, got: {err}"
+        );
+        // File must be unchanged
+        let content = std::fs::read_to_string(&file_path)?;
+        assert!(content.contains("🐸🐸🐸"));
+        Ok(())
+    }
 }
