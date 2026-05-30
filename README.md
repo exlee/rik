@@ -241,7 +241,7 @@ Continuously monitor files and process markers as they appear:
 rik -w 'src/**/*.rs'
 ```
 
-Press Ctrl+C to stop watching. Press Space to stop the current processing loop.
+Press Ctrl+C to stop watching. Press Space to stop the current processing loop (Unix only; not supported on Windows).
 
 ### Verbose mode
 

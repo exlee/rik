@@ -18,6 +18,7 @@ pub fn clear_stop() {
 ///
 /// Briefly sets stdin to non-canonical + non-blocking, reads pending bytes,
 /// then immediately restores the original termios.
+#[cfg(unix)]
 pub fn poll_space_key() -> bool {
     let fd = 0;
     let mut termios: libc::termios = unsafe { std::mem::zeroed() };
@@ -48,6 +49,12 @@ pub fn poll_space_key() -> bool {
     }
 
     space_pressed
+}
+
+/// No-op on non-Unix (Windows) -- no termios support.
+#[cfg(not(unix))]
+pub fn poll_space_key() -> bool {
+    false
 }
 
 /// Spawn a background thread that polls for Space key every 100ms.
