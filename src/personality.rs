@@ -65,7 +65,7 @@ pub fn pre_work_personality(alias: &str) {
     let alias_string = String::from(alias);
     let pick_idx = rand::random_range(0..quotes.len());
     let pick = quotes[pick_idx];
-    println!("[{}] {}", alias_string, pick);
+    println!("[{}]: {}", alias_string, pick);
 }
 pub fn post_work_personality(alias: &str) {
     let quotes = POSTWORK_QUOTES.get_or_init(|| {
@@ -76,5 +76,5 @@ pub fn post_work_personality(alias: &str) {
     });
     let pick_idx = rand::random_range(0..quotes.len());
     let pick = quotes[pick_idx];
-    println!("[{}] {}", alias, pick);
+    println!("[{}]: {}", alias, pick);
 }
