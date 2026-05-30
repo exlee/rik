@@ -41,11 +41,7 @@ pub fn motd_personality() {
 
         fn pad_line(line: &str) -> String {
             let pad_size = MAX_SIZE.saturating_sub(line.len());
-            let left = if pad_size % 2 == 0 {
-                " ".repeat(pad_size / 2)
-            } else {
-                " ".repeat((pad_size + 1) / 2)
-            };
+            let left = " ".repeat(pad_size / 2);
 
             format!("{}{}\n", left, line)
         }
@@ -55,8 +51,7 @@ pub fn motd_personality() {
             result.push_str(&pad_line(line));
         }
 
-        let result = result.trim_end().to_string();
-        result
+        result.trim_end().to_string()
     };
     println!("\n{}", wrapped);
 }

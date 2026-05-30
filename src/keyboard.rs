@@ -36,7 +36,7 @@ pub fn poll_space_key() -> bool {
 
     let mut buf = [0u8; 32];
     let space_pressed = match unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) } {
-        n if n > 0 => buf[..n as usize].iter().any(|&b| b == b' '),
+        n if n > 0 => buf[..n as usize].contains(&b' '),
         _ => false,
     };
 

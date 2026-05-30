@@ -225,6 +225,14 @@ Multiple patterns can be joined with commas:
 rik 'src/**/*.rs,tests/**/*.rs'
 ```
 
+### Context markers
+
+Use slash-delimited markers to provide extra context without content replacement. The marker is removed after processing:
+
+```
+rik: /see the type definition above for reference/
+```
+
 ### Watch mode
 
 Continuously monitor files and process markers as they appear:
@@ -233,7 +241,7 @@ Continuously monitor files and process markers as they appear:
 rik -w 'src/**/*.rs'
 ```
 
-Press Ctrl+C to stop watching.
+Press Ctrl+C to stop watching. Press Space to stop the current processing loop.
 
 ### Verbose mode
 
@@ -261,9 +269,10 @@ rik gives the agent three tools during processing:
 |---|---|
 | `read_file` | Read other files for context (types, imports, conventions). Supports offset/limit. |
 | `edit_file` | Replace exact text in the target file. Requires unique match. |
+| `write_file` | Create new files (refuses to overwrite existing ones). |
 | `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
 
-The agent can chain these tools across up to 20 turns before producing final edits.
+All file tools are sandboxed to the current working directory. The agent can chain these tools across up to 20 turns before producing final edits.
 
 ## Guardrails
 
@@ -286,7 +295,7 @@ All markers in a single file are processed in one pass. rik won't stop after fin
 rik is intentionally limited by design:
 
 - **No REPL** -- you mark up files, run rik, review diffs. Repeat.
-- **No arbitrary writes** -- the agent can only edit via `edit_file` which requires exact text matches.
+- **No arbitrary writes** -- the agent can only edit via `edit_file` which requires exact text matches, and only within the file being processed.
 - **No conversation history** -- each invocation is stateless and independent.
 - **Diff-first feedback** -- every change produces a diff so you see exactly what was modified.
 

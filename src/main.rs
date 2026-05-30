@@ -1,5 +1,4 @@
 use clap::Parser;
-use tokio::signal;
 
 mod cleanup;
 mod complete;
@@ -49,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     print_motd(&cli.alias, &config);
-    ctrlc::set_handler(|| {
+    let _ = ctrlc::set_handler(|| {
         cleanup::cleanup();
         std::process::exit(0);
     });

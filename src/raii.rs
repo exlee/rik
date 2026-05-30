@@ -33,10 +33,6 @@ impl FileReverter {
         Some(arc)
     }
 
-    /// Expose the path for registry bookkeeping.
-    pub fn path(&self) -> &Path {
-        &self.file_path
-    }
 
     /// Mark this edit batch as successful — suppress revert.
     pub fn mark_success(&self) {

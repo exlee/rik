@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-30
+
+### Added
+
+- **Context markers** — `rik: /slash-delimited/` markers provide extra context to the agent and are auto-removed after completion (no content replacement)
+- **Marker span auto-update** — line positions are recalculated after each edit, keeping multi-marker files consistent
+- **File sandboxing** — `read_file`, `write_file`, and `list_files` tools are restricted to the current working directory and use relative paths in output
+- **Edit tool path scoping** — `edit_file` can only edit the file currently being processed; `file_path` argument removed from tool schema
+- **Marker line-range enforcement** — edits near a marker are validated against Prolog-style endpoint logic (Q/P matching)
+- **Personality module** — replaces standalone `MoodifyTool` with a `Mood` enum + `moodify` function, `pre_work`/`post_work` quotes, and MOTD display
+- **Keyboard listener** — press Space during watch mode to stop the current processing loop
+- **RAII file reverter** — `FileReverter` guard automatically reverts partial edits on early return or cancellation; integrated with `Drop` and Ctrl+C cleanup
+- **Watch mode deduplication** — tracks file content hashes to skip unchanged files, eliminating duplicate processing
+- **Nested bracket balancing** — closing delimiters no longer require alias prefix; bracket depth is tracked atomically
+
+### Changed
+
+- Improved tool-call logging: human-readable argument formatting for `list_files`, `read_file`, and `edit_file` instead of raw JSON
+- Personality quote printing no longer uses a random delay (immediate output)
+- `complete_marker.rs` moved from `tools/` to `src/markers.rs` as a top-level module
+- Removed unused `CompleteMarkerTool` from the tool registry
+
+### Fixed
+
+- `edit_near_marker` now correctly checks edit endpoints against each marker line rather than doing range-overlap detection
+- `div_ceil` padding in personality box replaced with idiomatic Rust
+- Multiple clippy warnings resolved (unused imports, unnecessary casts, collapsed else-if chains, `.contains()` vs `.iter().any()`)
+
 ## [0.1.1] - 2026-05-28
 
 ### Added

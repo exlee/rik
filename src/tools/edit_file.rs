@@ -190,7 +190,7 @@ fn byte_offset_to_line(content: &str, offset: usize) -> usize {
     content[..offset]
         .chars()
         .filter(|&c| c == '\n')
-        .count() as usize
+        .count()
         + 1
 }
 

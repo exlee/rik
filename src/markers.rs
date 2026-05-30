@@ -176,19 +176,17 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {    let pre
                         if depth > 0 {
                             inner_lines.push(content_line.trim_start().to_string());
                         }
-                    } else {
-                        if line_closes < 0 {
-                            depth = depth.saturating_sub(1);
-                            if depth == 0 {
-                                found_close = true;
-                                break;
-                            }
-                        } else if line_closes > 0 {
-                            depth = depth.saturating_add(line_closes as usize);
-                            inner_lines.push(content_line.trim_start().to_string());
-                        } else {
-                            inner_lines.push(content_line.trim_start().to_string());
+                    } else if line_closes < 0 {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            found_close = true;
+                            break;
                         }
+                    } else if line_closes > 0 {
+                        depth = depth.saturating_add(line_closes as usize);
+                        inner_lines.push(content_line.trim_start().to_string());
+                    } else {
+                        inner_lines.push(content_line.trim_start().to_string());
                     }
                     j += 1;
                 }
