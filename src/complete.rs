@@ -427,10 +427,10 @@ where
                                     format!("{}", path)
                                 }
                             } else {
-                                tool_call.function.arguments.to_string()
+                                "???".to_string()
                             }
                         } else {
-                            tool_call.function.arguments.to_string()
+                            "???".to_string()
                         }
                     }
                     _ => tool_call.function.arguments.to_string(),
