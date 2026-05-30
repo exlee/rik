@@ -29,18 +29,7 @@ fn match_opening_delimiter(text: &str) -> Option<(&'static str, &'static str)> {
     None
 }
 
-/// Check if a line is the closing delimiter for a multi-line block.
-/// The line should be exactly `alias: close` (with optional whitespace).
-fn is_closing_line(line: &str, alias: &str, close: &str) -> bool {
-    let prefix = format!("{alias}:");
-    if let Some(pos) = line.find(&prefix) {
-        let after = line[pos + prefix.len()..].trim();
-        // Allow close to have leading whitespace stripped by the trim
-        after == close || after == close.trim()
-    } else {
-        false
-    }
-}
+
 
 /// Find all markers matching the given alias prefix in content.
 ///
@@ -66,20 +55,98 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<(usize, usize, String)> {
         if let Some(pos) = line.find(&prefix) {
             let after = line[pos + prefix.len()..].trim();
 
-            if let Some((_open, close)) = match_opening_delimiter(after) {
-                // Multi-line marker: collect lines until closing delimiter
+            if let Some((open, close)) = match_opening_delimiter(after) {
+                // Multi-line marker: collect lines until closing delimiter.
+                // For single-char delimiters we track nesting depth so that
+                // balanced pairs inside the body don't prematurely close the block.
                 let start_line = i + 1; // 1-based
+                let is_single_char = open.len() == 1;
+                let open_ch = if is_single_char { Some(open.as_bytes()[0]) } else { None };
+                let close_ch = if is_single_char { Some(close.as_bytes()[0]) } else { None };
+
                 let mut inner_lines: Vec<String> = Vec::new();
                 let mut found_close = false;
+                let mut depth: usize = 1; // started at depth 1 from the opening line
 
                 let mut j = i + 1;
                 while j < lines.len() {
-                    if is_closing_line(lines[j], alias, close) {
-                        found_close = true;
-                        break;
+                    let content_line = lines[j];
+
+                    // Count how many times the exact close delimiter appears on this line.
+                    // For multi-char delimiters ("[[", "[[[") we do an exact line match.
+                    // For single-char delimiters we scan the line character-by-character.
+                    let line_closes = if is_single_char {
+                        // Scan for open/close chars; skip quoted strings roughly.
+                        let mut local_depth_delta: isize = 0;
+                        let mut in_single_quote = false;
+                        let mut in_double_quote = false;
+                        for b in content_line.bytes() {
+                            match b {
+                                b'\\' if in_single_quote || in_double_quote => {
+                                    // skip next char inside quotes
+                                    continue;
+                                }
+                                b'\'' if !in_double_quote => {
+                                    in_single_quote = !in_single_quote;
+                                    continue;
+                                }
+                                b'"' if !in_single_quote => {
+                                    in_double_quote = !in_double_quote;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                            if !in_single_quote && !in_double_quote {
+                                if Some(b) == open_ch {
+                                    local_depth_delta += 1;
+                                } else if Some(b) == close_ch {
+                                    local_depth_delta -= 1;
+                                }
+                            }
+                        }
+                        local_depth_delta
+                    } else {
+                        // Multi-char delimiter: check if the trimmed line is exactly the close token.
+                        // We need to count occurrences for cases like "]] ]]" but keep it simple:
+                        // atomic match — trimmed line equals close string counts as 1 close.
+                        if content_line.trim() == close {
+                            -1
+                        } else if content_line.trim() == open {
+                            1
+                        } else {
+                            0
+                        }
+                    };
+
+                    if is_single_char {
+                        depth = if line_closes >= 0 {
+                            depth.saturating_add(line_closes as usize)
+                        } else {
+                            depth.saturating_sub((-line_closes) as usize)
+                        };
+                        if depth == 0 {
+                            found_close = true;
+                            break;
+                        }
+                        // Don't add the line if it was purely the closing bracket
+                        // (depth went to 0). Otherwise include it.
+                        if depth > 0 {
+                            inner_lines.push(content_line.trim_start().to_string());
+                        }
+                    } else {
+                        if line_closes < 0 {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                found_close = true;
+                                break;
+                            }
+                        } else if line_closes > 0 {
+                            depth = depth.saturating_add(line_closes as usize);
+                            inner_lines.push(content_line.trim_start().to_string());
+                        } else {
+                            inner_lines.push(content_line.trim_start().to_string());
+                        }
                     }
-                    // Strip leading whitespace from inner lines
-                    inner_lines.push(lines[j].trim_start().to_string());
                     j += 1;
                 }
 
@@ -139,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_double_brackets() {
-        let content = "before\nrik: [[\nA\nB\nC\nrik: ]]\nafter";
+        let content = "before\nrik: [[\nA\nB\nC\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 6, "A\nB\nC".to_string()));
@@ -147,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_parens() {
-        let content = "before\nrik: (\nA\nB\nC\nrik: )\nafter";
+        let content = "before\nrik: (\nA\nB\nC\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 6, "A\nB\nC".to_string()));
@@ -155,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_curly_braces() {
-        let content = "before\nrik: {{\nA\nB\nC\nrik: }}\nafter";
+        let content = "before\nrik: {{\nA\nB\nC\n}}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 6, "A\nB\nC".to_string()));
@@ -163,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_triple_brackets() {
-        let content = "before\nrik: [[[\nline1\nline2\nrik: ]]]\nafter";
+        let content = "before\nrik: [[[\nline1\nline2\n]]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 5, "line1\nline2".to_string()));
@@ -171,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_triple_parens() {
-        let content = "before\nrik: (((\nfoo\nbar\nbaz\nrik: )))\nafter";
+        let content = "before\nrik: (((\nfoo\nbar\nbaz\n)))\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 6, "foo\nbar\nbaz".to_string()));
@@ -179,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_triple_curly() {
-        let content = "before\nrik: {{{\nhello\nworld\nrik: }}}\nafter";
+        let content = "before\nrik: {{{\nhello\nworld\n}}}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 5, "hello\nworld".to_string()));
@@ -187,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_single_bracket() {
-        let content = "before\nrik: [\nsingle line inside\nrik: ]\nafter";
+        let content = "before\nrik: [\nsingle line inside\n]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 4, "single line inside".to_string()));
@@ -195,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_single_paren() {
-        let content = "before\nrik: (\nsingle paren content\nrik:)\nafter";
+        let content = "before\nrik: (\nsingle paren content\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 4, "single paren content".to_string()));
@@ -203,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_single_curly() {
-        let content = "before\nrik: {\ncurly content here\nrik: }\nafter";
+        let content = "before\nrik: {\ncurly content here\n}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 4, "curly content here".to_string()));
@@ -212,7 +279,7 @@ mod tests {
     #[test]
     fn test_find_markers_mismatched_delimiters_not_multiline() {
         // Open with [[ close with )) - mismatch, should not match as multiline
-        let content = "rik: [[\nmismatched\nrik: ))";
+        let content = "rik: [[\nmismatched\n))";
         let markers = find_markers(content, "rik");
         // Should fall back to single-line behavior or not match multiline
         assert!(!markers.is_empty());
@@ -220,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiple_multiline_in_file() {
-        let content = "start\nrik: [[\nfirst A\nfirst B\nrik: ]]\nmiddle\nrik: ((\nsecond X\nsecond Y\nrik: ))\nend";
+        let content = "start\nrik: [[\nfirst A\nfirst B\n]]\nmiddle\nrik: ((\nsecond X\nsecond Y\n))\nend";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 2);
         assert_eq!(markers[0], (2, 5, "first A\nfirst B".to_string()));
@@ -229,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_with_leading_whitespace() {
-        let content = "before\nrik: [[\n  indented A\n  indented B\nrik: ]]\nafter";
+        let content = "before\nrik: [[\n  indented A\n  indented B\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 5, "indented A\nindented B".to_string()));
@@ -237,16 +304,16 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_preserves_blank_lines_inside() {
-        let content = "before\nrik: [[\nA\n\nC\nrik: ]]\nafter";
+        let content = "before\nrik: [[\nA\n\nC\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 6, "A\n\nC".to_string()));
     }
 
     #[test]
-    fn test_find_markers_multiline_closing_on_separate_line_only_alias_prefix() {
-        // The closing delimiter line contains only alias and closing bracket
-        let content = "before\nrik: [[\ncontent line\nrik: ]]\nafter";
+    fn test_find_markers_multiline_closing_bare_delimiter() {
+        // Closing delimiter is bare, no alias prefix
+        let content = "before\nrik: [[\ncontent line\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 4, "content line".to_string()));
@@ -254,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_find_markers_multiline_surrounding_context_preserved() {
-        let content = "line before\nrik: [[\ninstruction body\nrik: ]]\nline after";
+        let content = "line before\nrik: [[\ninstruction body\n]]\nline after";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], (2, 4, "instruction body".to_string()));
@@ -262,11 +329,86 @@ mod tests {
 
     #[test]
     fn test_find_markers_single_and_multiline_mixed() {
-        let content = "rik: simple query\nrik: [[\nmulti\nline\nrik: ]]\nrik: another simple";
+        let content = "rik: simple query\nrik: [[\nmulti\nline\n]]\nrik: another simple";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 3);
         assert_eq!(markers[0], (1, 1, "simple query".to_string()));
         assert_eq!(markers[1], (2, 5, "multi\nline".to_string()));
         assert_eq!(markers[2], (6, 6, "another simple".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Nested balancing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_nested_parens_balanced_ignored() {
+        // Single-char delimiters track nesting; inner () are ignored when balanced.
+        let content = "rik: (\nvar = (2+2)*2\n)\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "var = (2+2)*2".to_string()));
+    }
+
+    #[test]
+    fn test_nested_brackets_balanced_ignored() {
+        let content = "rik: [\ndata = [1, [2,3]]\n]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "data = [1, [2,3]]".to_string()));
+    }
+
+    #[test]
+    fn test_nested_curly_balanced_ignored() {
+        let content = "rik: {\nobj = {{a: 1}}\n}\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "obj = {{a: 1}}".to_string()));
+    }
+
+    #[test]
+    fn test_multi_char_no_nesting() {
+        // Multi-char delimiters like [[ do NOT do character-level nesting.
+        // The whole trimmed line must match the delimiter atomically.
+        let content = "rik: [[\n[[ [ [ hello ] ] ]]\n]]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "[[ [ [ hello ] ] ]]".to_string()));
+    }
+
+    #[test]
+    fn test_atomic_marker_space_separated_not_match() {
+        // "[ [" is not the same as "[["
+        let content = "rik: [[\nprint: [ [\n]]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "print: [ [".to_string()));
+    }
+
+    #[test]
+    fn test_balanced_inner_parens_kept_open() {
+        // Inner balanced parens keep the block open; only net-close brings depth to 0.
+        let content = "rik: (\nx = (a + b) * (c + d)\n)\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "x = (a + b) * (c + d)".to_string()));
+    }
+
+    #[test]
+    fn test_deeply_nested_single_char() {
+        let content = "rik: [\n[[[deep]]]\n]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        // [[[deep]]] has 3 opens and 3 closes (delta=0), then ] on next line closes
+        assert_eq!(markers[0], (1, 3, "[[[deep]]]".to_string()));
+    }
+
+    #[test]
+    fn test_quotes_ignored_in_nesting() {
+        // Parentheses inside quoted strings are ignored for nesting count.
+        let content = "rik: (\nlet s = \"(hello)\"\n)\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], (1, 3, "let s = \"(hello)\"".to_string()));
     }
 }
