@@ -318,9 +318,9 @@ where
     let mut last_text = false;
 
     while let Some(item) = stream.next().await {
-        if cleanup::is_shutting_down() {
+        if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
+            crate::keyboard::clear_stop();
             return Ok(0);
-
         }
         if !matches!(
             &item,
@@ -624,7 +624,7 @@ pub async fn cmd_watch(
         "Watching {} for '{alias}:' markers (pattern: {pattern})...",
         watch_path.display()
     );
-    println!("Press Ctrl+C to stop.\n");
+    println!("Press SPACE to stop current work, Ctrl+C to quit.\n");
 
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = recommended_watcher(tx)?;
@@ -645,6 +645,14 @@ pub async fn cmd_watch(
     let mut prev_hashes = snapshot_hashes(&pattern);
 
     loop {
+        if crate::keyboard::should_stop() {
+            crate::keyboard::clear_stop();
+            continue;
+        }
+        if cleanup::is_shutting_down() {
+            break;
+        }
+
         match rx.recv() {
             Ok(Ok(_event)) => {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;

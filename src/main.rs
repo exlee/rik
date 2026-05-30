@@ -5,6 +5,7 @@ mod cleanup;
 mod complete;
 mod config;
 mod helpers;
+mod keyboard;
 mod markers;
 mod personality;
 mod raii;
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     if cli.watch {
+        crate::keyboard::start_space_listener();
         complete::cmd_watch(&config, &cli.alias, cli.pattern, cli.verbose).await
     } else {
         complete::cmd_complete(&config, &cli.alias, cli.pattern, cli.verbose).await
