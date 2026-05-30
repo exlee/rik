@@ -230,10 +230,10 @@ where
     );
 
     for m in &task_markers {
-        println!("[{alias}] Task: {} (L{})", m.query, m.start_line);
+        println!("[{alias}]: Task: {} (L{})", m.query, m.start_line);
     }
     for m in &context_markers {
-        println!("[{alias}] Context: {} (L{})", m.query, m.start_line);
+        println!("[{alias}]: Context: {} (L{})", m.query, m.start_line);
     }
 
     // Build a single prompt with all markers.
@@ -431,7 +431,7 @@ where
                 if summary.is_empty() {
                     println!("[{alias}]: Done.");
                 } else {
-                    println!("[{alias}] Done: {summary}");
+                    println!("[{alias}]: Done: {summary}");
                 }
             }
             Err(e) => {

@@ -47,7 +47,7 @@ impl FileReverter {
     pub fn revert_if_needed(&self) {
         if !self.success.load(Ordering::Relaxed) {
             println!(
-                "CANCEL: reverting {}",
+                "[cancel]: reverting {}",
                 self.file_path.display()
             );
             if let Err(e) = std::fs::write(&self.file_path, &self.original_content) {
@@ -58,6 +58,12 @@ impl FileReverter {
                 );
             }
         }
+    }
+}
+
+impl Drop for FileReverter {
+    fn drop(&mut self) {
+        self.revert_if_needed();
     }
 }
 
