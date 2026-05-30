@@ -158,7 +158,7 @@ where
     );
 
     for (line_no, _end, query) in &markers {
-        println!("  [line {line_no}] Query: {query}");
+        println!("    [{alias}] Found item: {query} (L{line_no})");
     }
 
     // Build a single prompt with all markers.
@@ -260,11 +260,53 @@ where
                     is_reasoning = false;
                     print!("\n    \x1b[0m");
                 }
-                println!(
-                    "    [tool: {}] {}",
-                    tool_call.function.name,
-                    tool_call.function.arguments.to_string()
-                );
+                let msg = match tool_call.function.name.as_str() {
+                    "list_files" => {
+                        if let Some(obj) = tool_call.function.arguments.as_object() {
+                            let mut parts = Vec::new();
+                            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                                parts.push(format!("path={}", path));
+                            }
+                            if let Some(glob) = obj.get("glob").and_then(|v| v.as_str()) {
+                                parts.push(format!("glob={}", glob));
+                            }
+                            parts.join(" ")
+                        } else {
+                            tool_call.function.arguments.to_string()
+                        }
+                    }
+                    "read_file" => {
+                        if let Some(obj) = tool_call.function.arguments.as_object() {
+                            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                                path.to_string()
+                            } else {
+                                tool_call.function.arguments.to_string()
+                            }
+                        } else {
+                            tool_call.function.arguments.to_string()
+                        }
+                    }
+                    "edit_file" => {
+                        if let Some(obj) = tool_call.function.arguments.as_object() {
+                            let old_len = obj.get("old_text")
+                                .and_then(|v| v.as_str())
+                                .map_or(0, |s| s.len());
+                            let new_len = obj.get("new_text")
+                                .and_then(|v| v.as_str())
+                                .map_or(0, |s| s.len());
+                            format!(
+                                "{} input_len={} output_len={}",
+                                file_path.display(),
+                                old_len,
+                                new_len
+                            )
+                        } else {
+                            tool_call.function.arguments.to_string()
+                        }
+                    }
+                    _ => tool_call.function.arguments.to_string(),
+                };
+                println!("    [tool: {}] {}", tool_call.function.name, msg);
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
                 if is_reasoning && verbose {
@@ -272,9 +314,9 @@ where
                 }
                 let summary = res.response();
                 if summary.is_empty() {
-                    println!("    Done.");
+                    println!("    [{alias}]: Done.");
                 } else {
-                    println!("    Done: {summary}");
+                    println!("    [{alias}] Done: {summary}");
                 }
             }
             Err(e) => {
