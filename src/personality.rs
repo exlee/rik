@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 static MOTD_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
 static PREWORK_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
 static POSTWORK_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
+static TOOL_PAD: &str = "    ";
 
 pub fn motd_personality() {
     let quotes = MOTD_QUOTES.get_or_init(|| {
@@ -42,9 +43,9 @@ pub fn motd_personality() {
         fn pad_line(line: &str) -> String {
             let pad_size = MAX_SIZE.saturating_sub(line.len());
             let left = if pad_size % 2 == 0 {
-                    " ".repeat(pad_size/2)
+                " ".repeat(pad_size / 2)
             } else {
-                    " ".repeat((pad_size+1)/2)
+                " ".repeat((pad_size + 1) / 2)
             };
 
             format!("{}{}\n", left, line)
@@ -54,7 +55,7 @@ pub fn motd_personality() {
         for line in lines.iter() {
             result.push_str(&pad_line(line));
         }
-        
+
         let result = result.trim_end().to_string();
         result
     };
@@ -68,9 +69,9 @@ pub fn pre_work_personality(alias: &str) {
             .collect::<Vec<_>>()
     });
     let alias_string = String::from(alias);
-        let pick_idx = rand::random_range(0..quotes.len());
-        let pick = quotes[pick_idx];
-        println!("    [{}] {}", alias_string, pick);
+    let pick_idx = rand::random_range(0..quotes.len());
+    let pick = quotes[pick_idx];
+    println!("{TOOL_PAD}[{}] {}", alias_string, pick);
 }
 pub fn post_work_personality(alias: &str) {
     let quotes = POSTWORK_QUOTES.get_or_init(|| {
@@ -81,6 +82,5 @@ pub fn post_work_personality(alias: &str) {
     });
     let pick_idx = rand::random_range(0..quotes.len());
     let pick = quotes[pick_idx];
-    println!("    [{}] {}", alias, pick);
+    println!("[{}] {}", alias, pick);
 }
-

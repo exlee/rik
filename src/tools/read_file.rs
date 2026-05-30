@@ -72,10 +72,12 @@ impl Tool for ReadFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = Path::new(&args.path);
+        let rel = crate::helpers::validate_relative_path(&args.path)
+            .map_err(|e| ReadFileError(e.to_string()))?;
+        let path = Path::new(&rel);
 
         if !path.exists() {
-            return Err(ReadFileError(format!("File not found: {}", args.path)));
+            return Err(ReadFileError(format!("File not found: {rel}")));
         }
 
         let content = std::fs::read_to_string(path)?;
@@ -94,7 +96,7 @@ impl Tool for ReadFileTool {
         }
 
         let result: Vec<&str> = lines[start..end].to_vec();
-        let mut header = format!("[read_file] path={}", args.path);
+        let mut header = format!("[read_file] path={rel}");
         if let Some(offset) = args.offset {
             write!(header, " offset={offset}").ok();
         }
@@ -109,16 +111,33 @@ impl Tool for ReadFileTool {
 mod tests {
     use super::*;
 
+    /// Create a subdirectory under cwd and return its relative path.
+    /// Caller is responsible for cleaning up.
+    fn make_relative_dir(name: &str) -> (std::path::PathBuf, String) {
+        let rel = std::path::PathBuf::from(format!(".rik_test_{}", name));
+        let abs = std::env::current_dir().unwrap().join(&rel);
+        std::fs::create_dir_all(&abs).ok();
+        (abs, rel.to_string_lossy().to_string())
+    }
+
+    fn cleanup_rel(rel: &str) {
+        let p = std::path::PathBuf::from(rel);
+        if p.exists() {
+            std::fs::remove_dir_all(&p).ok();
+        }
+    }
+
     #[tokio::test]
     async fn test_read_file_full() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test.txt");
+        let (abs, rel) = make_relative_dir("full");
+        let file_path = abs.join("test.txt");
+        let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2\nline3")?;
 
         let tool = ReadFileTool;
         let result = tool
             .call(ReadFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file.clone(),
                 offset: None,
                 limit: None,
             })
@@ -126,24 +145,23 @@ mod tests {
 
         assert_eq!(
             result,
-            format!(
-                "[read_file] path={}\nline1\nline2\nline3",
-                file_path.display()
-            )
+            format!("[read_file] path={}\nline1\nline2\nline3", rel_file)
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_read_file_slice() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test.txt");
+        let (abs, rel) = make_relative_dir("slice");
+        let file_path = abs.join("test.txt");
+        let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5")?;
 
         let tool = ReadFileTool;
         let result = tool
             .call(ReadFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file.clone(),
                 offset: Some(2),
                 limit: Some(2),
             })
@@ -153,6 +171,7 @@ mod tests {
             result.ends_with("line2\nline3"),
             "Expected result to end with 'line2\nline3', got: {result}"
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 
@@ -161,7 +180,7 @@ mod tests {
         let tool = ReadFileTool;
         let result = tool
             .call(ReadFileArgs {
-                path: "/nonexistent/file.txt".to_string(),
+                path: ".rik_test_nonexistent/file.txt".to_string(),
                 offset: None,
                 limit: None,
             })
@@ -172,15 +191,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_file_rejects_absolute_path() {
+        let tool = ReadFileTool;
+        let result = tool
+            .call(ReadFileArgs {
+                path: "/etc/hosts".to_string(),
+                offset: None,
+                limit: None,
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Absolute paths are not allowed"));
+    }
+
+    #[tokio::test]
     async fn test_read_file_prints_tool_name_and_params() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test.txt");
+        let (abs, rel) = make_relative_dir("params");
+        let file_path = abs.join("test.txt");
+        let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2")?;
 
         let tool = ReadFileTool;
         let result = tool
             .call(ReadFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file.clone(),
                 offset: None,
                 limit: None,
             })
@@ -192,23 +230,25 @@ mod tests {
             result
         );
         assert!(
-            result.contains(file_path.display().to_string().as_str()),
+            result.contains(&rel_file),
             "Output must contain the file path, got: {}",
             result
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_read_file_prints_offset_and_limit_params() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test.txt");
+        let (abs, rel) = make_relative_dir("offset_limit");
+        let file_path = abs.join("test.txt");
+        let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2\nline3")?;
 
         let tool = ReadFileTool;
         let result = tool
             .call(ReadFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file.clone(),
                 offset: Some(2),
                 limit: Some(2),
             })
@@ -229,6 +269,7 @@ mod tests {
             "Output must contain 'limit=2', got: {}",
             result
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 }

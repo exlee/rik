@@ -194,6 +194,43 @@ fn format_provider_name(p: Provider) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Path safety helpers
+// ---------------------------------------------------------------------------
+
+/// Validate that `raw` resolves within the current working directory.
+/// Returns the validated relative path string, or an error describing why
+/// the path was rejected.
+pub fn validate_relative_path(raw: &str) -> Result<String> {
+    let path = std::path::Path::new(raw);
+
+    // Reject absolute paths
+    if path.is_absolute() {
+        anyhow::bail!("Absolute paths are not allowed: {}", raw);
+    }
+
+    // Normalize: resolve "." and ".." components against cwd,
+    // then check the result still starts with cwd.
+    let cwd = std::env::current_dir()
+        .map_err(|e| anyhow::anyhow!("Unable to determine current directory: {e}"))?;
+
+    let resolved = cwd.join(path)
+        .canonicalize()
+        .unwrap_or_else(|_| cwd.join(path));
+
+    let cwd_canonical = cwd.canonicalize().unwrap_or(cwd.clone());
+
+    if !resolved.starts_with(&cwd_canonical) {
+        anyhow::bail!(
+            "Path escapes current directory: {}",
+            raw
+        );
+    }
+
+    // Return the original relative path (already safe after checks above).
+    Ok(raw.trim_start_matches("./").to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Glob / diff helpers (unchanged)
 // ---------------------------------------------------------------------------
 

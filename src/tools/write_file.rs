@@ -69,12 +69,13 @@ impl Tool for WriteFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = Path::new(&args.path);
+        let rel = crate::helpers::validate_relative_path(&args.path)
+            .map_err(|e| WriteFileError(e.to_string()))?;
+        let path = Path::new(&rel);
 
         if path.exists() {
             return Err(WriteFileError(format!(
-                "File already exists: {}",
-                args.path
+                "File already exists: {rel}"
             )));
         }
 
@@ -85,8 +86,8 @@ impl Tool for WriteFileTool {
         std::fs::write(path, &args.content)?;
 
         Ok(format!(
-            "[write_file] path={} content={}\nSuccessfully created file: {}",
-            args.path, args.content, args.path
+            "[write_file] path={} content={}\nSuccessfully created file: {rel}",
+            rel, args.content
         ))
     }
 }
@@ -95,54 +96,92 @@ impl Tool for WriteFileTool {
 mod tests {
     use super::*;
 
+    /// Create a subdirectory under cwd and return its relative path.
+    /// Caller is responsible for cleaning up.
+    fn make_relative_dir(name: &str) -> (std::path::PathBuf, String) {
+        let rel = std::path::PathBuf::from(format!(".rik_test_{}", name));
+        let abs = std::env::current_dir().unwrap().join(&rel);
+        std::fs::create_dir_all(&abs).ok();
+        (abs, rel.to_string_lossy().to_string())
+    }
+
+    fn cleanup_rel(rel: &str) {
+        let p = std::path::PathBuf::from(rel);
+        if p.exists() {
+            std::fs::remove_dir_all(&p).ok();
+        }
+    }
+
     #[tokio::test]
     async fn test_write_file_new() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("subdir").join("new_file.txt");
+        let (abs, rel) = make_relative_dir("write_new");
+        let rel_file = format!("{}/subdir/new_file.txt", rel);
+        let abs_file = abs.join("subdir").join("new_file.txt");
 
         let tool = WriteFileTool;
         let result = tool
             .call(WriteFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file.clone(),
                 content: "hello world".into(),
             })
             .await?;
 
         assert!(result.contains("Successfully created"));
-        assert!(file_path.exists());
-        assert_eq!(std::fs::read_to_string(&file_path)?, "hello world");
+        assert!(abs_file.exists());
+        assert_eq!(std::fs::read_to_string(&abs_file)?, "hello world");
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_write_file_rejects_existing() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("existing.txt");
-        std::fs::write(&file_path, "old")?;
+        let (abs, rel) = make_relative_dir("write_exists");
+        let rel_file = format!("{}/existing.txt", rel);
+        let abs_file = abs.join("existing.txt");
+        std::fs::write(&abs_file, "old")?;
 
         let tool = WriteFileTool;
         let result = tool
             .call(WriteFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file,
                 content: "new".into(),
             })
             .await;
 
         assert!(result.is_err());
-        assert_eq!(std::fs::read_to_string(&file_path)?, "old");
+        assert_eq!(std::fs::read_to_string(&abs_file)?, "old");
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
+    async fn test_write_file_rejects_absolute_path() {
+        let tool = WriteFileTool;
+        let result = tool
+            .call(WriteFileArgs {
+                path: "/tmp/evil.txt".to_string(),
+                content: "bad".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Absolute paths are not allowed"));
+    }
+
+    #[tokio::test]
     async fn test_write_file_prints_tool_name_and_params() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("output.txt");
+        let (abs, rel) = make_relative_dir("write_params");
+        let rel_file = format!("{}/output.txt", rel);
+        let _ = abs.join("output.txt"); // suppress unused warning on abs
         let content = "hello world";
 
         let tool = WriteFileTool;
         let result = tool
             .call(WriteFileArgs {
-                path: file_path.display().to_string(),
+                path: rel_file.clone(),
                 content: content.into(),
             })
             .await?;
@@ -153,7 +192,7 @@ mod tests {
             result
         );
         assert!(
-            result.contains(file_path.display().to_string().as_str()),
+            result.contains(&rel_file),
             "Output must contain the file path, got: {}",
             result
         );
@@ -162,6 +201,7 @@ mod tests {
             "Output must contain the content, got: {}",
             result
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 }

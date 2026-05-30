@@ -163,6 +163,11 @@ where
 
     // Build a single prompt with all markers.
     let file_display = file_path.display().to_string();
+    // Use a relative path for the target so tool output is clean.
+    let target_rel: String = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| file_path.strip_prefix(&cwd).ok().map(|p| p.display().to_string()))
+        .unwrap_or_else(|| file_display.clone());
     let markers_block = markers
         .iter()
         .map(|(line_no, _end, query)| {
@@ -193,7 +198,7 @@ where
         .preamble(&preamble)
         .tool(tools::ReadFileTool)
         .tool(tools::EditFileTool {
-            target_path: file_path.display().to_string(),
+            target_path: target_rel,
             marker_spans: markers.iter().map(|(s, e, _)| (*s, *e)).collect(),
         })
         .tool(tools::ListFilesTool)
@@ -306,7 +311,7 @@ where
                     }
                     _ => tool_call.function.arguments.to_string(),
                 };
-                println!("    [tool: {}] {}", tool_call.function.name, msg);
+                println!("    [tool]: {} {}", tool_call.function.name, msg);
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
                 if is_reasoning && verbose {
@@ -331,9 +336,6 @@ where
     let content_after = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
 
-    if personality {
-        personality::post_work_personality(alias);
-    }
     if content_before != content_after
         && let Some(cmd) = resolve_diff_tool(diff_tool)
     {
@@ -346,6 +348,9 @@ where
         if !diff_output.is_empty() {
             println!("{diff_output}");
         }
+    }
+    if personality {
+        personality::post_work_personality(alias);
     }
 
     Ok(markers.len())

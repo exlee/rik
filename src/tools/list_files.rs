@@ -59,24 +59,26 @@ impl Tool for ListFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let root = args
-            .path
-            .as_deref()
-            .map(Path::new)
-            .unwrap_or_else(|| Path::new("."));
+        // Validate the requested directory stays within cwd.
+        let dir_arg = args.path.as_deref().unwrap_or(".");
+        let _validated = crate::helpers::validate_relative_path(dir_arg)
+            .map_err(|e| ListFilesError(e.to_string()))?;
+
+        let root = Path::new(dir_arg);
 
         let root = if root.is_relative() {
             std::env::current_dir()
                 .map_err(|e| ListFilesError(e.to_string()))?
                 .join(root)
         } else {
-            root.to_path_buf()
+            return Err(ListFilesError(
+                "Absolute paths are not allowed".to_string(),
+            ));
         };
 
         if !root.exists() {
             return Err(ListFilesError(format!(
-                "Directory not found: {}",
-                root.display()
+                "Directory not found: {dir_arg}"
             )));
         }
 
@@ -98,10 +100,16 @@ impl Tool for ListFilesTool {
             builder.overrides(glob);
         }
 
+        let cwd = std::env::current_dir()
+            .map_err(|e| ListFilesError(e.to_string()))?;
         let mut paths: Vec<String> = Vec::new();
         for entry in builder.build().filter_map(|e| e.ok()) {
             if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                paths.push(entry.path().display().to_string());
+                if let Ok(rel) = entry.path().strip_prefix(&cwd) {
+                    paths.push(rel.display().to_string());
+                } else {
+                    paths.push(entry.path().display().to_string());
+                }
             }
         }
 
@@ -109,7 +117,7 @@ impl Tool for ListFilesTool {
             return Ok("No files found.".to_string());
         }
 
-        let mut header = format!("[list_files] path={}", root.display());
+        let mut header = format!("[list_files] path={dir_arg}");
         if let Some(ref glob_pattern) = args.glob {
             write!(header, " glob={glob_pattern}").ok();
         }
@@ -121,18 +129,34 @@ impl Tool for ListFilesTool {
 mod tests {
     use super::*;
 
+    /// Create a subdirectory under cwd and return its relative path.
+    /// Caller is responsible for cleaning up.
+    fn make_relative_dir(name: &str) -> (std::path::PathBuf, String) {
+        let rel = std::path::PathBuf::from(format!(".rik_test_{}", name));
+        let abs = std::env::current_dir().unwrap().join(&rel);
+        std::fs::create_dir_all(&abs).ok();
+        (abs, rel.to_string_lossy().to_string())
+    }
+
+    fn cleanup_rel(rel: &str) {
+        let p = std::path::PathBuf::from(rel);
+        if p.exists() {
+            std::fs::remove_dir_all(&p).ok();
+        }
+    }
+
     #[tokio::test]
     async fn test_list_files_basic() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join("a.txt"), "a")?;
-        std::fs::write(dir.path().join("b.rs"), "b")?;
-        std::fs::create_dir(dir.path().join("sub"))?;
-        std::fs::write(dir.path().join("sub").join("c.txt"), "c")?;
+        let (abs, rel) = make_relative_dir("list_basic");
+        std::fs::write(abs.join("a.txt"), "a")?;
+        std::fs::write(abs.join("b.rs"), "b")?;
+        std::fs::create_dir(abs.join("sub"))?;
+        std::fs::write(abs.join("sub").join("c.txt"), "c")?;
 
         let tool = ListFilesTool;
         let result = tool
             .call(ListFilesArgs {
-                path: Some(dir.path().display().to_string()),
+                path: Some(rel.clone()),
                 glob: None,
             })
             .await?;
@@ -143,20 +167,21 @@ mod tests {
         assert!(result.contains("b.rs"));
         assert!(result.contains("sub"));
         assert!(result.contains("c.txt"));
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_list_files_respects_gitignore() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join("a.txt"), "a")?;
-        std::fs::write(dir.path().join("ignored.log"), "log")?;
-        std::fs::write(dir.path().join(".ignore"), "*.log\n")?;
+        let (abs, rel) = make_relative_dir("list_ignore");
+        std::fs::write(abs.join("a.txt"), "a")?;
+        std::fs::write(abs.join("ignored.log"), "log")?;
+        std::fs::write(abs.join(".ignore"), "*.log\n")?;
 
         let tool = ListFilesTool;
         let result = tool
             .call(ListFilesArgs {
-                path: Some(dir.path().display().to_string()),
+                path: Some(rel.clone()),
                 glob: None,
             })
             .await?;
@@ -164,20 +189,21 @@ mod tests {
         assert!(result.contains("a.txt"));
         assert!(!result.contains("ignored.log"));
         assert!(result.contains(".ignore"));
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_list_files_with_glob() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join("a.txt"), "a")?;
-        std::fs::write(dir.path().join("b.rs"), "b")?;
-        std::fs::write(dir.path().join("c.rs"), "c")?;
+        let (abs, rel) = make_relative_dir("list_glob");
+        std::fs::write(abs.join("a.txt"), "a")?;
+        std::fs::write(abs.join("b.rs"), "b")?;
+        std::fs::write(abs.join("c.rs"), "c")?;
 
         let tool = ListFilesTool;
         let result = tool
             .call(ListFilesArgs {
-                path: Some(dir.path().display().to_string()),
+                path: Some(rel.clone()),
                 glob: Some("*.rs".to_string()),
             })
             .await?;
@@ -185,6 +211,7 @@ mod tests {
         assert!(!result.contains("a.txt"));
         assert!(result.contains("b.rs"));
         assert!(result.contains("c.rs"));
+        cleanup_rel(&rel);
         Ok(())
     }
 
@@ -193,7 +220,7 @@ mod tests {
         let tool = ListFilesTool;
         let result = tool
             .call(ListFilesArgs {
-                path: Some("/nonexistent/dir".to_string()),
+                path: Some(".rik_test_nonexistent/dir".to_string()),
                 glob: None,
             })
             .await;
@@ -203,14 +230,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_files_rejects_absolute_path() {
+        let tool = ListFilesTool;
+        let result = tool
+            .call(ListFilesArgs {
+                path: Some("/tmp".to_string()),
+                glob: None,
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Absolute paths are not allowed"));
+    }
+
+    #[tokio::test]
     async fn test_list_files_prints_tool_name_and_params() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join("a.txt"), "a")?;
+        let (_abs, rel) = make_relative_dir("list_params");
+        // We need to write a file inside the dir for it to show up.
+        // Since we don't have abs here, recreate it:
+        let abs = std::env::current_dir().unwrap().join(&rel);
+        std::fs::write(abs.join("a.txt"), "a")?;
 
         let tool = ListFilesTool;
         let result = tool
             .call(ListFilesArgs {
-                path: Some(dir.path().display().to_string()),
+                path: Some(rel.clone()),
                 glob: None,
             })
             .await?;
@@ -221,23 +268,24 @@ mod tests {
             result
         );
         assert!(
-            result.contains(dir.path().display().to_string().as_str()),
+            result.contains(&rel),
             "Output must contain the directory path, got: {}",
             result
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_list_files_prints_glob_param() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join("a.txt"), "a")?;
-        std::fs::write(dir.path().join("b.rs"), "b")?;
+        let (abs, rel) = make_relative_dir("list_glob_param");
+        std::fs::write(abs.join("a.txt"), "a")?;
+        std::fs::write(abs.join("b.rs"), "b")?;
 
         let tool = ListFilesTool;
         let result = tool
             .call(ListFilesArgs {
-                path: Some(dir.path().display().to_string()),
+                path: Some(rel.clone()),
                 glob: Some("*.rs".to_string()),
             })
             .await?;
@@ -252,6 +300,7 @@ mod tests {
             "Output must contain 'glob=*.rs', got: {}",
             result
         );
+        cleanup_rel(&rel);
         Ok(())
     }
 }
