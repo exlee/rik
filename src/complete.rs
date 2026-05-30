@@ -8,7 +8,7 @@ use std::io::Write;
 use crate::config::{Config, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
-use crate::{personality, raii, tools};
+use crate::{cleanup, personality, raii, tools};
 
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
@@ -311,11 +311,17 @@ where
         personality::pre_work_personality(alias);
     }
 
+    let _reverter = raii::FileReverter::new(file_path, alias)
+        .with_context(|| format!("Failed to read {} for backup", file_path.display()))?;
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut is_reasoning = false;
     let mut last_text = false;
 
     while let Some(item) = stream.next().await {
+        if cleanup::is_shutting_down() {
+            return Ok(0);
+
+        }
         if !matches!(
             &item,
             Ok(MultiTurnStreamItem::StreamAssistantItem(
@@ -456,6 +462,7 @@ where
             println!("{diff_output}");
         }
     }
+    _reverter.mark_success();
     if personality {
         personality::post_work_personality(alias);
     }

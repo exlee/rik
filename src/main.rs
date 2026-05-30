@@ -1,11 +1,14 @@
 use clap::Parser;
+use tokio::signal;
 
+mod cleanup;
 mod complete;
 mod config;
 mod helpers;
 mod markers;
-mod tools;
 mod personality;
+mod raii;
+mod tools;
 
 #[derive(Parser)]
 #[command(name = "rik", about = "Complete '<alias>: <query>' markers in files")]
@@ -45,6 +48,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     print_motd(&cli.alias, &config);
+    ctrlc::set_handler(|| {
+        cleanup::cleanup();
+        std::process::exit(0);
+    });
 
     if cli.watch {
         complete::cmd_watch(&config, &cli.alias, cli.pattern, cli.verbose).await
@@ -56,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
 fn print_motd(alias: &str, config: &config::Config) {
     let motd = include_str!("../MOTD.txt");
     let alias = if alias != "rik" {
-        format!(" (call me \"{alias}\"!)\n")
+        format!(" (call me \"{alias}\")\n")
     } else {
         String::new()
     };
