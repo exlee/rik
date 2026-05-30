@@ -1,5 +1,3 @@
-use std::{str::Lines, sync::OnceLock};
-
 use clap::Parser;
 
 mod complete;
@@ -7,6 +5,7 @@ mod config;
 mod helpers;
 mod markers;
 mod tools;
+mod personality;
 
 #[derive(Parser)]
 #[command(name = "rik", about = "Complete '<alias>: <query>' markers in files")]
@@ -26,6 +25,10 @@ struct Cli {
     /// Print agent details alongside completion
     #[arg(short, long)]
     verbose: bool,
+
+    /// Enable personality
+    #[arg(long)]
+    personality: bool,
 }
 
 #[tokio::main]
@@ -35,9 +38,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = config::load()?;
+    let mut config = config::load()?;
 
-    print_motd(&cli.alias);
+    if cli.personality {
+        config.personality = true;
+    }
+
+    print_motd(&cli.alias, &config);
 
     if cli.watch {
         complete::cmd_watch(&config, &cli.alias, cli.pattern, cli.verbose).await
@@ -46,13 +53,15 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn print_motd(alias: &str) {
+fn print_motd(alias: &str, config: &config::Config) {
     let motd = include_str!("../MOTD.txt");
     let alias = if alias != "rik" {
         format!(" (call me \"{alias}\"!)\n")
     } else {
         String::new()
     };
-
+    if config.personality {
+        personality::motd_personality();
+    }
     println!("{}", motd.replace("{ALIAS}", &alias));
 }

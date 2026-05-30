@@ -4,15 +4,11 @@ use rig::agent::MultiTurnStreamItem;
 use rig::client::CompletionClient;
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use std::io::Write;
-use std::sync::OnceLock;
 
 use crate::config::{Config, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
-use crate::tools;
+use crate::{personality, tools};
 
-static MOTD_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
-static PREWORK_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
-static POSTWORK_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
@@ -179,7 +175,6 @@ where
         .collect::<Vec<_>>()
         .join("\n---\n");
 
-
     let prompt = format!(
         "Target file: {file_display}\n\
          File type: {}\n\
@@ -193,7 +188,7 @@ where
     );
 
     let preamble = make_preamble(alias);
-    let mut agent_builder = comp_client
+    let agent_builder = comp_client
         .agent(model_name)
         .preamble(&preamble)
         .tool(tools::ReadFileTool)
@@ -207,7 +202,7 @@ where
     let agent = agent_builder.build();
 
     if personality {
-        pre_work_personality(alias);
+        personality::pre_work_personality(alias);
     }
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut is_reasoning = false;
@@ -295,7 +290,7 @@ where
         .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
 
     if personality {
-        post_work_personality(alias);
+        personality::post_work_personality(alias);
     }
     if content_before != content_after
         && let Some(cmd) = resolve_diff_tool(diff_tool)
@@ -313,30 +308,6 @@ where
 
     Ok(markers.len())
 }
-
-fn pre_work_personality(alias: &str) {
-    let quotes = PREWORK_QUOTES.get_or_init(|| {
-        include_str!("../pre_work.txt")
-            .lines()
-            .map(|s| s.trim())
-            .collect::<Vec<_>>()
-    });
-    let pick_idx = rand::random_range(0..quotes.len());
-    let pick = quotes[pick_idx];
-    println!("    [{}] {}", alias, pick);
-}
-fn post_work_personality(alias: &str) {
-    let quotes = POSTWORK_QUOTES.get_or_init(|| {
-        include_str!("../post_work.txt")
-            .lines()
-            .map(|s| s.trim())
-            .collect::<Vec<_>>()
-    });
-    let pick_idx = rand::random_range(0..quotes.len());
-    let pick = quotes[pick_idx];
-    println!("    [{}] {}", alias, pick);
-}
-
 
 async fn process_scan_and_complete<C>(
     comp_client: &C,
@@ -494,19 +465,6 @@ pub async fn cmd_watch(
     );
     println!("Press Ctrl+C to stop.\n");
 
-    if config.personality {
-        let quotes = MOTD_QUOTES.get_or_init(|| {
-            include_str!("../safety.txt")
-                .lines()
-                .map(|s| s.trim())
-                .collect::<Vec<_>>()
-        });
-
-        let pick_idx = rand::random_range(0..quotes.len());
-        let pick = quotes[pick_idx];
-        println!("[ {} ]\n", pick);
-    };
-
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = recommended_watcher(tx)?;
     watcher.watch(&watch_path, RecursiveMode::Recursive)?;
@@ -561,3 +519,4 @@ pub async fn cmd_watch(
 
     Ok(())
 }
+
