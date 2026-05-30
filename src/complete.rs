@@ -7,7 +7,8 @@ use std::io::Write;
 
 use crate::config::{Config, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
-use crate::{personality, tools};
+use crate::markers::MarkerKind;
+use crate::{personality, raii, tools};
 
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
@@ -118,6 +119,59 @@ Rules:
   A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.")
 }
 
+/// Remove context-only marker lines from a file.
+///
+/// Re-scans the current file content so line positions are accurate even after
+/// earlier edits shifted things. Only removes single-line context markers
+/// (`rik: /.../`). Multi-line blocks are never context markers.
+fn remove_context_markers(
+    file_path: &std::path::Path,
+    alias: &str,
+    _initial_context: &[&crate::markers::FoundMarker],
+) -> anyhow::Result<()> {
+    let mut content = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
+
+    // Re-scan so positions reflect any shifts from prior edits.
+    let markers = crate::markers::find_markers(&content, alias);
+    let context_positions: Vec<usize> = markers.iter()
+        .filter(|m| m.kind == MarkerKind::Context)
+        .map(|m| m.start_line - 1) // Convert 1-based to 0-based index.
+        .collect();
+
+    if context_positions.is_empty() {
+        return Ok(());
+    }
+
+    println!(
+        "Removing {} context marker line(s) from {}",
+        context_positions.len(),
+        file_path.display()
+    );
+
+    // Build the new content with context lines removed.
+    let lines: Vec<&str> = content.lines().collect();
+    let had_trailing_newline = content.ends_with('\n');
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| !context_positions.contains(idx))
+        .map(|(_, line)| *line)
+        .collect();
+
+    let mut new_content = kept.join("\n");
+    // Preserve trailing newline if original had one.
+    if had_trailing_newline && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    content = new_content;
+
+    std::fs::write(file_path, &content)
+        .with_context(|| format!("Failed to write cleaned file: {}", file_path.display()))?;
+
+    Ok(())
+}
+
 async fn process_file_markers<C>(
     comp_client: &C,
     model_name: &str,
@@ -134,8 +188,8 @@ where
     let content_before = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
 
-    let markers = crate::markers::find_markers(&content_before, alias);
-    if markers.is_empty() {
+    let all_markers = crate::markers::find_markers(&content_before, alias);
+    if all_markers.is_empty() {
         return Ok(0);
     }
 
@@ -144,7 +198,7 @@ where
         if content_before.lines().any(|line| line.contains(&halt_tag)) {
             println!(
                 "Found {} marker(s) in {} — skipped ({} guard present)",
-                markers.len(),
+                all_markers.len(),
                 file_path.display(),
                 halt_tag
             );
@@ -152,14 +206,34 @@ where
         }
     }
 
+    // Separate task markers (agent must act) from context markers (supplementary info).
+    let task_markers: Vec<_> = all_markers.iter()
+        .filter(|m| m.kind == MarkerKind::Task)
+        .collect();
+    let context_markers: Vec<_> = all_markers.iter()
+        .filter(|m| m.kind == MarkerKind::Context)
+        .collect();
+
+    // If there are no task markers (only context), nothing to do but clean up.
+    if task_markers.is_empty() {
+        remove_context_markers(file_path, alias, &context_markers)?;
+        return Ok(context_markers.len());
+    }
+
     println!(
-        "Found {} marker(s) in {}",
-        markers.len(),
-        file_path.display()
+        "Found {} marker(s) in {} ({} task{}, {} context)",
+        all_markers.len(),
+        file_path.display(),
+        task_markers.len(),
+        if task_markers.len() != 1 { "s" } else { "" },
+        context_markers.len(),
     );
 
-    for (line_no, _end, query) in &markers {
-        println!("[{alias}] Found item: {query} (L{line_no})");
+    for m in &task_markers {
+        println!("[{alias}] Task: {} (L{})", m.query, m.start_line);
+    }
+    for m in &context_markers {
+        println!("[{alias}] Context: {} (L{})", m.query, m.start_line);
     }
 
     // Build a single prompt with all markers.
@@ -174,28 +248,49 @@ where
                 .map(|p| p.display().to_string())
         })
         .unwrap_or_else(|| file_display.clone());
-    let markers_block = markers
+
+    // Build blocks for task markers (things the agent must do).
+    let tasks_block = task_markers
         .iter()
-        .map(|(line_no, _end, query)| {
+        .map(|m| {
             format!(
-                "Marker at line {line_no}: {alias}: {query}\n\
+                "TASK at line {}: {alias}: {}\n\
                  Surrounding context:\n{}",
-                surrounding_lines(&content_before, *line_no, 5)
+                m.start_line,
+                m.query,
+                surrounding_lines(&content_before, m.start_line, 5),
             )
         })
         .collect::<Vec<_>>()
         .join("\n---\n");
 
+    // Build blocks for context markers (supplementary background info).
+    let context_section = if context_markers.is_empty() {
+        String::new()
+    } else {
+        let ctx_items = context_markers
+            .iter()
+            .map(|m| format!("- Line {}: {}", m.start_line, m.query))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\nCONTEXT NOTES (background info, not tasks — these lines will be auto-removed after work):\n{ctx_items}"
+        )
+    };
+
     let prompt = format!(
         "Target file: {file_display}\n\
          File type: {}\n\
-         Number of markers to complete: {}\n\
+         Number of tasks to complete: {}\n\
+         {}\n\
          {}\n\n\
-         Read the file and any other context you need, then replace ALL markers \
-         with content that is coherent with the rest of the file according to each instruction.",
+         Read the file and any other context you need, then replace ALL task markers \
+         with content that is coherent with the rest of the file according to each instruction.\n\
+         Do NOT edit or remove the context note lines yourself; they will be cleaned up automatically.",
         file_extension(file_path),
-        markers.len(),
-        markers_block,
+        task_markers.len(),
+        tasks_block,
+        context_section,
     );
 
     let preamble = make_preamble(alias);
@@ -215,6 +310,7 @@ where
     if personality {
         personality::pre_work_personality(alias);
     }
+
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut is_reasoning = false;
     let mut last_text = false;
@@ -340,6 +436,9 @@ where
         }
     }
 
+    // Remove context marker lines from the file (they served their purpose).
+    remove_context_markers(file_path, alias, &context_markers)?;
+
     // Show diff if the file changed.
     let content_after = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
@@ -361,7 +460,7 @@ where
         personality::post_work_personality(alias);
     }
 
-    Ok(markers.len())
+    Ok(all_markers.len())
 }
 
 async fn process_scan_and_complete<C>(

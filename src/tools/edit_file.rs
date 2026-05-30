@@ -5,6 +5,8 @@ use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::markers::MarkerKind;
+
 // ---------------------------------------------------------------------------
 // EditFile tool
 // ---------------------------------------------------------------------------
@@ -98,9 +100,11 @@ impl Tool for EditFileTool {
         let content = std::fs::read_to_string(path)?;
 
         // Re-scan markers from current file content so positions are always fresh.
+        // Only task markers count as edit anchors; context markers do not.
         let marker_spans: Vec<(usize, usize)> = crate::markers::find_markers(&content, &self.alias)
             .iter()
-            .map(|(s, e, _)| (*s, *e))
+            .filter(|m| m.kind == MarkerKind::Task)
+            .map(|m| (m.start_line, m.end_line))
             .collect();
 
         let first = content.find(&args.old_text);

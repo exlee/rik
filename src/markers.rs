@@ -41,11 +41,54 @@ fn match_opening_delimiter(text: &str) -> Option<(&'static str, &'static str)> {
 /// Content between open and close is the query, with leading whitespace stripped
 /// per line and blank lines preserved.
 ///
-/// Returns `Vec<(start_line, end_line, query)>` where line numbers are 1-based.
+/// Marker classification: task (agent must act) vs. context (supplementary info).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerKind {
+    /// A normal instruction the agent must complete.
+    Task,
+    /// Extra context delimited by slashes (`rik: /some note/`).
+    /// Should be removed from the file after work completes.
+    Context,
+}
+
+/// A discovered marker with its position, kind, and extracted query text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundMarker {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub kind: MarkerKind,
+    pub query: String,
+}
+
+/// Check if a raw query string is a slash-delimited context annotation.
+/// Matches `/.../` where the content starts and ends with `/`.
+fn is_context_query(query: &str) -> bool {
+    let trimmed = query.trim();
+    trimmed.starts_with('/') && trimmed.ends_with('/') && trimmed.len() >= 2
+}
+
+/// Extract the inner text of a context query (strip surrounding slashes only).
+fn context_inner(query: &str) -> String {
+    let trimmed = query.trim();
+    // Strip exactly one leading and one trailing character (the slashes).
+    trimmed[1..trimmed.len() - 1].to_string()
+}
+
+/// Find all markers matching the given alias prefix in content.
+///
+/// Single-line: `{alias}: <query>` -- everything after the prefix on the same line.
+///   If `<query>` starts and ends with `/` it is classified as `Context`.
+///
+/// Multi-line: `{alias}: <open>` starts a block, `{alias}: <close>` ends it.
+/// Supported delimiter pairs: `[`/`]`, `[[`/`]]`, `[[[`/`]]]`,
+/// `(`/`)`, `((`/`))`, `(((`/`)))`, `{`/`}`, `{{`/`}}`, `{{{`/`}}}`.
+/// Content between open and close is the query, with leading whitespace stripped
+/// per line and blank lines preserved. Multi-line markers are always `Task`.
+///
+/// Returns `Vec<FoundMarker>` where line numbers are 1-based.
 /// For single-line markers `start_line == end_line`. For multi-line markers
 /// `end_line` is the closing delimiter line.
-pub fn find_markers(content: &str, alias: &str) -> Vec<(usize, usize, String)> {
-    let prefix = format!("{alias}:");
+pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {    let prefix = format!("{alias}:");
     let lines: Vec<&str> = content.lines().collect();
     let mut markers = Vec::new();
     let mut i = 0;
@@ -152,18 +195,51 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<(usize, usize, String)> {
 
                 if found_close && !inner_lines.is_empty() {
                     let end_line = j + 1; // 1-based, closing delimiter line
-                    markers.push((start_line, end_line, inner_lines.join("\n")));
+                    markers.push(FoundMarker {
+                        start_line,
+                        end_line,
+                        kind: MarkerKind::Task,
+                        query: inner_lines.join("\n"),
+                    });
                     i = j + 1; // skip past closing line
                     continue;
                 } else {
-                    // Mismatched/unclosed delimiter -- treat opening line as single-line marker
-                    markers.push((start_line, start_line, after.to_string()));
+                    // Mismatched/unclosed delimiter -- treat opening line as single-line marker.
+                    let kind = if is_context_query(after) {
+                        MarkerKind::Context
+                    } else {
+                        MarkerKind::Task
+                    };
+                    markers.push(FoundMarker {
+                        start_line,
+                        end_line: start_line,
+                        kind,
+                        query: if kind == MarkerKind::Context {
+                            context_inner(after)
+                        } else {
+                            after.to_string()
+                        },
+                    });
                     i += 1;
                     continue;
                 }
             } else if !after.is_empty() {
-                // Single-line marker
-                markers.push((i + 1, i + 1, after.to_string()));
+                // Single-line marker — classify as Context or Task.
+                let kind = if is_context_query(after) {
+                    MarkerKind::Context
+                } else {
+                    MarkerKind::Task
+                };
+                markers.push(FoundMarker {
+                    start_line: i + 1,
+                    end_line: i + 1,
+                    kind,
+                    query: if kind == MarkerKind::Context {
+                        context_inner(after)
+                    } else {
+                        after.to_string()
+                    },
+                });
             }
         }
         i += 1;
@@ -176,6 +252,24 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<(usize, usize, String)> {
 mod tests {
     use super::*;
 
+    /// Shorthand to build a `FoundMarker` tuple assertion target.
+    fn mk(start: usize, end: usize, kind: MarkerKind, query: &str) -> FoundMarker {
+        FoundMarker {
+            start_line: start,
+            end_line: end,
+            kind,
+            query: query.to_string(),
+        }
+    }
+
+    fn task(start: usize, end: usize, query: &str) -> FoundMarker {
+        mk(start, end, MarkerKind::Task, query)
+    }
+
+    fn ctx(start: usize, end: usize, query: &str) -> FoundMarker {
+        mk(start, end, MarkerKind::Context, query)
+    }
+
     #[test]
     fn test_find_markers_various_positions() {
         let content = "rik: first query\n\
@@ -187,10 +281,10 @@ mod tests {
                        end";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 4);
-        assert_eq!(markers[0], (1, 1, "first query".to_string()));
-        assert_eq!(markers[1], (3, 3, "second query]".to_string()));
-        assert_eq!(markers[2], (5, 5, "third}".to_string()));
-        assert_eq!(markers[3], (6, 6, "fourth\";".to_string()));
+        assert_eq!(markers[0], task(1, 1, "first query"));
+        assert_eq!(markers[1], task(3, 3, "second query]"));
+        assert_eq!(markers[2], task(5, 5, "third}"));
+        assert_eq!(markers[3], task(6, 6, "fourth\";"));
     }
 
     #[test]
@@ -198,6 +292,56 @@ mod tests {
         let content = "rik:\nsome text\nrik:   \n";
         let markers = find_markers(content, "rik");
         assert!(markers.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Context marker tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_context_slash_delimited() {
+        let content = "rik: /this is background info/\ncode here\nrik: do something";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0], ctx(1, 1, "this is background info"));
+        assert_eq!(markers[1], task(3, 3, "do something"));
+    }
+
+    #[test]
+    fn test_context_with_spaces_inside() {
+        let content = "rik: / leading space preserved /";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], ctx(1, 1, " leading space preserved "));
+    }
+
+    #[test]
+    fn test_context_not_false_positive_path() {
+        // A single slash or unbalanced slashes should NOT be context.
+        let content = "rik: fix /usr/bin/foo\nrik: bar/baz";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0].kind, MarkerKind::Task);
+        assert_eq!(markers[1].kind, MarkerKind::Task);
+    }
+
+    #[test]
+    fn test_context_bare_slashes_only() {
+        // "/ /" is valid context with empty-ish inner text.
+        let content = "rik: / /";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, MarkerKind::Context);
+    }
+
+    #[test]
+    fn test_context_mixed_with_tasks() {
+        let content = "rik: /see README.md for conventions/\nrik: add auth middleware\nrik: /use bcrypt not md5/";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 3);
+        assert_eq!(markers[0], ctx(1, 1, "see README.md for conventions"));
+        assert_eq!(markers[1], task(2, 2, "add auth middleware"));
+        assert_eq!(markers[2], ctx(3, 3, "use bcrypt not md5"));
     }
 
     // -----------------------------------------------------------------------
@@ -209,7 +353,7 @@ mod tests {
         let content = "before\nrik: [[\nA\nB\nC\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 6, "A\nB\nC".to_string()));
+        assert_eq!(markers[0], task(2, 6, "A\nB\nC"));
     }
 
     #[test]
@@ -217,7 +361,7 @@ mod tests {
         let content = "before\nrik: (\nA\nB\nC\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 6, "A\nB\nC".to_string()));
+        assert_eq!(markers[0], task(2, 6, "A\nB\nC"));
     }
 
     #[test]
@@ -225,7 +369,7 @@ mod tests {
         let content = "before\nrik: {{\nA\nB\nC\n}}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 6, "A\nB\nC".to_string()));
+        assert_eq!(markers[0], task(2, 6, "A\nB\nC"));
     }
 
     #[test]
@@ -233,7 +377,7 @@ mod tests {
         let content = "before\nrik: [[[\nline1\nline2\n]]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 5, "line1\nline2".to_string()));
+        assert_eq!(markers[0], task(2, 5, "line1\nline2"));
     }
 
     #[test]
@@ -241,7 +385,7 @@ mod tests {
         let content = "before\nrik: (((\nfoo\nbar\nbaz\n)))\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 6, "foo\nbar\nbaz".to_string()));
+        assert_eq!(markers[0], task(2, 6, "foo\nbar\nbaz"));
     }
 
     #[test]
@@ -249,7 +393,7 @@ mod tests {
         let content = "before\nrik: {{{\nhello\nworld\n}}}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 5, "hello\nworld".to_string()));
+        assert_eq!(markers[0], task(2, 5, "hello\nworld"));
     }
 
     #[test]
@@ -257,7 +401,7 @@ mod tests {
         let content = "before\nrik: [\nsingle line inside\n]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 4, "single line inside".to_string()));
+        assert_eq!(markers[0], task(2, 4, "single line inside"));
     }
 
     #[test]
@@ -265,7 +409,7 @@ mod tests {
         let content = "before\nrik: (\nsingle paren content\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 4, "single paren content".to_string()));
+        assert_eq!(markers[0], task(2, 4, "single paren content"));
     }
 
     #[test]
@@ -273,7 +417,7 @@ mod tests {
         let content = "before\nrik: {\ncurly content here\n}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 4, "curly content here".to_string()));
+        assert_eq!(markers[0], task(2, 4, "curly content here"));
     }
 
     #[test]
@@ -290,8 +434,8 @@ mod tests {
         let content = "start\nrik: [[\nfirst A\nfirst B\n]]\nmiddle\nrik: ((\nsecond X\nsecond Y\n))\nend";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 2);
-        assert_eq!(markers[0], (2, 5, "first A\nfirst B".to_string()));
-        assert_eq!(markers[1], (7, 10, "second X\nsecond Y".to_string()));
+        assert_eq!(markers[0], task(2, 5, "first A\nfirst B"));
+        assert_eq!(markers[1], task(7, 10, "second X\nsecond Y"));
     }
 
     #[test]
@@ -299,7 +443,7 @@ mod tests {
         let content = "before\nrik: [[\n  indented A\n  indented B\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 5, "indented A\nindented B".to_string()));
+        assert_eq!(markers[0], task(2, 5, "indented A\nindented B"));
     }
 
     #[test]
@@ -307,7 +451,7 @@ mod tests {
         let content = "before\nrik: [[\nA\n\nC\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 6, "A\n\nC".to_string()));
+        assert_eq!(markers[0], task(2, 6, "A\n\nC"));
     }
 
     #[test]
@@ -316,7 +460,7 @@ mod tests {
         let content = "before\nrik: [[\ncontent line\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 4, "content line".to_string()));
+        assert_eq!(markers[0], task(2, 4, "content line"));
     }
 
     #[test]
@@ -324,7 +468,7 @@ mod tests {
         let content = "line before\nrik: [[\ninstruction body\n]]\nline after";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (2, 4, "instruction body".to_string()));
+        assert_eq!(markers[0], task(2, 4, "instruction body"));
     }
 
     #[test]
@@ -332,9 +476,9 @@ mod tests {
         let content = "rik: simple query\nrik: [[\nmulti\nline\n]]\nrik: another simple";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 3);
-        assert_eq!(markers[0], (1, 1, "simple query".to_string()));
-        assert_eq!(markers[1], (2, 5, "multi\nline".to_string()));
-        assert_eq!(markers[2], (6, 6, "another simple".to_string()));
+        assert_eq!(markers[0], task(1, 1, "simple query"));
+        assert_eq!(markers[1], task(2, 5, "multi\nline"));
+        assert_eq!(markers[2], task(6, 6, "another simple"));
     }
 
     // -----------------------------------------------------------------------
@@ -347,7 +491,7 @@ mod tests {
         let content = "rik: (\nvar = (2+2)*2\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "var = (2+2)*2".to_string()));
+        assert_eq!(markers[0], task(1, 3, "var = (2+2)*2"));
     }
 
     #[test]
@@ -355,7 +499,7 @@ mod tests {
         let content = "rik: [\ndata = [1, [2,3]]\n]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "data = [1, [2,3]]".to_string()));
+        assert_eq!(markers[0], task(1, 3, "data = [1, [2,3]]"));
     }
 
     #[test]
@@ -363,7 +507,7 @@ mod tests {
         let content = "rik: {\nobj = {{a: 1}}\n}\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "obj = {{a: 1}}".to_string()));
+        assert_eq!(markers[0], task(1, 3, "obj = {{a: 1}}"));
     }
 
     #[test]
@@ -373,7 +517,7 @@ mod tests {
         let content = "rik: [[\n[[ [ [ hello ] ] ]]\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "[[ [ [ hello ] ] ]]".to_string()));
+        assert_eq!(markers[0], task(1, 3, "[[ [ [ hello ] ] ]]"));
     }
 
     #[test]
@@ -382,7 +526,7 @@ mod tests {
         let content = "rik: [[\nprint: [ [\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "print: [ [".to_string()));
+        assert_eq!(markers[0], task(1, 3, "print: [ [")); 
     }
 
     #[test]
@@ -391,7 +535,7 @@ mod tests {
         let content = "rik: (\nx = (a + b) * (c + d)\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "x = (a + b) * (c + d)".to_string()));
+        assert_eq!(markers[0], task(1, 3, "x = (a + b) * (c + d)"));
     }
 
     #[test]
@@ -400,7 +544,7 @@ mod tests {
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         // [[[deep]]] has 3 opens and 3 closes (delta=0), then ] on next line closes
-        assert_eq!(markers[0], (1, 3, "[[[deep]]]".to_string()));
+        assert_eq!(markers[0], task(1, 3, "[[[deep]]]"));
     }
 
     #[test]
@@ -409,6 +553,6 @@ mod tests {
         let content = "rik: (\nlet s = \"(hello)\"\n)\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], (1, 3, "let s = \"(hello)\"".to_string()));
+        assert_eq!(markers[0], task(1, 3, "let s = \"(hello)\""));
     }
 }
