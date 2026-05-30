@@ -9,7 +9,6 @@ use crate::config::{Config, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::{personality, tools};
 
-
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
 // Each provider has its own concrete Client + CompletionModel types so we can't
@@ -140,15 +139,17 @@ where
         return Ok(0);
     }
 
-    let halt_tag = format!("!{alias}");
-    if content_before.lines().any(|line| line.contains(&halt_tag)) {
-        println!(
-            "Found {} marker(s) in {} — skipped ({} guard present)",
-            markers.len(),
-            file_path.display(),
-            halt_tag
-        );
-        return Ok(0);
+    let halt_tags = [format!("!{alias}"), format!("{alias}!")];
+    for halt_tag in halt_tags {
+        if content_before.lines().any(|line| line.contains(&halt_tag)) {
+            println!(
+                "Found {} marker(s) in {} — skipped ({} guard present)",
+                markers.len(),
+                file_path.display(),
+                halt_tag
+            );
+            return Ok(0);
+        }
     }
 
     println!(
@@ -158,7 +159,7 @@ where
     );
 
     for (line_no, _end, query) in &markers {
-        println!("    [{alias}] Found item: {query} (L{line_no})");
+        println!("[{alias}] Found item: {query} (L{line_no})");
     }
 
     // Build a single prompt with all markers.
@@ -166,7 +167,12 @@ where
     // Use a relative path for the target so tool output is clean.
     let target_rel: String = std::env::current_dir()
         .ok()
-        .and_then(|cwd| file_path.strip_prefix(&cwd).ok().map(|p| p.display().to_string()))
+        .and_then(|cwd| {
+            file_path
+                .strip_prefix(&cwd)
+                .ok()
+                .map(|p| p.display().to_string())
+        })
         .unwrap_or_else(|| file_display.clone());
     let markers_block = markers
         .iter()
@@ -199,7 +205,7 @@ where
         .tool(tools::ReadFileTool)
         .tool(tools::EditFileTool {
             target_path: target_rel,
-            marker_spans: markers.iter().map(|(s, e, _)| (*s, *e)).collect(),
+            alias: alias.to_string(),
         })
         .tool(tools::ListFilesTool)
         .default_max_turns(20);
@@ -230,7 +236,7 @@ where
                     is_reasoning = true;
                     print!("\n    \x1b[90m// thinking...\x1b[0m\n");
                 }
-                print!("    \x1b[90m{}\x1b[0m", reasoning.display_text());
+                print!("\x1b[90m{}\x1b[0m", reasoning.display_text());
                 std::io::stdout().flush().ok();
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(
@@ -240,7 +246,7 @@ where
                     is_reasoning = true;
                     print!("\n    \x1b[90m// thinking...\x1b[0m\n");
                 }
-                print!("    \x1b[90m{}\x1b[0m", reasoning);
+                print!("\x1b[90m{}\x1b[0m", reasoning);
                 std::io::stdout().flush().ok();
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)))
@@ -251,7 +257,7 @@ where
                     print!("\n    \x1b[0m");
                 }
                 if !last_text {
-                    print!("    ");
+                    print!("");
                     last_text = true;
                 }
                 print!("{}", text.text);
@@ -293,10 +299,12 @@ where
                     }
                     "edit_file" => {
                         if let Some(obj) = tool_call.function.arguments.as_object() {
-                            let old_len = obj.get("old_text")
+                            let old_len = obj
+                                .get("old_text")
                                 .and_then(|v| v.as_str())
                                 .map_or(0, |s| s.len());
-                            let new_len = obj.get("new_text")
+                            let new_len = obj
+                                .get("new_text")
                                 .and_then(|v| v.as_str())
                                 .map_or(0, |s| s.len());
                             format!(
@@ -311,7 +319,7 @@ where
                     }
                     _ => tool_call.function.arguments.to_string(),
                 };
-                println!("    [tool]: {} {}", tool_call.function.name, msg);
+                println!("[tool]: {} {}", tool_call.function.name, msg);
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
                 if is_reasoning && verbose {
@@ -319,13 +327,13 @@ where
                 }
                 let summary = res.response();
                 if summary.is_empty() {
-                    println!("    [{alias}]: Done.");
+                    println!("[{alias}]: Done.");
                 } else {
-                    println!("    [{alias}] Done: {summary}");
+                    println!("[{alias}] Done: {summary}");
                 }
             }
             Err(e) => {
-                eprintln!("    Stream error: {e}");
+                eprintln!("Stream error: {e}");
                 break;
             }
             _ => {}
@@ -566,4 +574,3 @@ pub async fn cmd_watch(
 
     Ok(())
 }
-

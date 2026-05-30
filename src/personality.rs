@@ -3,7 +3,6 @@ use std::sync::OnceLock;
 static MOTD_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
 static PREWORK_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
 static POSTWORK_QUOTES: OnceLock<Vec<&'static str>> = OnceLock::new();
-static TOOL_PAD: &str = "    ";
 
 pub fn motd_personality() {
     let quotes = MOTD_QUOTES.get_or_init(|| {
@@ -71,7 +70,7 @@ pub fn pre_work_personality(alias: &str) {
     let alias_string = String::from(alias);
     let pick_idx = rand::random_range(0..quotes.len());
     let pick = quotes[pick_idx];
-    println!("{TOOL_PAD}[{}] {}", alias_string, pick);
+    println!("[{}] {}", alias_string, pick);
 }
 pub fn post_work_personality(alias: &str) {
     let quotes = POSTWORK_QUOTES.get_or_init(|| {
