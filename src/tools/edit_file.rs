@@ -187,6 +187,8 @@ fn is_edit_near_marker(
 /// Convert a byte offset in `content` to a 1-based line number.
 fn byte_offset_to_line(content: &str, offset: usize) -> usize {
     let offset = offset.min(content.len());
+    // Round down to the nearest char boundary to avoid panicking inside multi-byte UTF-8.
+    let offset = content.floor_char_boundary(offset);
     content[..offset]
         .chars()
         .filter(|&c| c == '\n')
@@ -450,6 +452,22 @@ mod tests {
         assert_eq!(byte_offset_to_line(content, 4), 2);
         assert_eq!(byte_offset_to_line(content, 8), 3);
         assert_eq!(byte_offset_to_line(content, 14), 4);
+    }
+
+    #[test]
+    fn test_byte_offset_to_line_with_multibyte_chars() {
+        // 🐸 is 4 bytes (U+1F438).  Use it to ensure byte offsets that land
+        // inside a multi-byte character don't panic.
+        let content = "use anyhow::Context;\nlet frog = \"🐸\";\n";
+        // Line 1 is 20 bytes (+ newline = 21).  Byte 22 starts line 2.
+        assert_eq!(byte_offset_to_line(content, 21), 2);
+        // Byte 30 lands inside the 🐸 character (bytes 29..33) — must not panic.
+        let line = byte_offset_to_line(content, 30);
+        assert_eq!(line, 2);
+        // Byte far past the end — floors to content.len() which is after the
+        // trailing newline, so it counts as line 3 (two '\n' chars seen).
+        let line = byte_offset_to_line(content, 999);
+        assert_eq!(line, 3);
     }
 
     /// Build a file with numbered lines and a `rik:` marker at the given line number.

@@ -208,22 +208,14 @@ pub fn validate_relative_path(raw: &str) -> Result<String> {
         anyhow::bail!("Absolute paths are not allowed: {}", raw);
     }
 
-    // Normalize: resolve "." and ".." components against cwd,
-    // then check the result still starts with cwd.
-    let cwd = std::env::current_dir()
-        .map_err(|e| anyhow::anyhow!("Unable to determine current directory: {e}"))?;
-
-    let resolved = cwd.join(path)
-        .canonicalize()
-        .unwrap_or_else(|_| cwd.join(path));
-
-    let cwd_canonical = cwd.canonicalize().unwrap_or(cwd.clone());
-
-    if !resolved.starts_with(&cwd_canonical) {
-        anyhow::bail!(
-            "Path escapes current directory: {}",
-            raw
-        );
+    // Reject any path component that escapes upwards.
+    for component in path.components() {
+        if component == std::path::Component::ParentDir {
+            anyhow::bail!(
+                "Path escapes current directory (contains '..'): {}",
+                raw
+            );
+        }
     }
 
     // Return the original relative path (already safe after checks above).

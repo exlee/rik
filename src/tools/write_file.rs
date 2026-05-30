@@ -172,6 +172,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_file_rejects_path_traversal() {
+        let tool = WriteFileTool;
+        let result = tool
+            .call(WriteFileArgs {
+                path: "../../etc/evil.txt".to_string(),
+                content: "bad".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("escapes current directory"),
+            "Expected path traversal rejection, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_write_file_prints_tool_name_and_params() -> anyhow::Result<()> {
         let (abs, rel) = make_relative_dir("write_params");
         let rel_file = format!("{}/output.txt", rel);

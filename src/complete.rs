@@ -10,6 +10,7 @@ use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
 use crate::{cleanup, personality, raii, tools};
 
+
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
 // Each provider has its own concrete Client + CompletionModel types so we can't
@@ -149,16 +150,6 @@ fn remove_remaining_markers(
         }
     }
 
-    println!(
-        "Removing {} remaining marker(s) ({}) from {}",
-        markers.len(),
-        markers.iter().map(|m| format!("{}:{}-{}", match m.kind {
-            MarkerKind::Task => "task",
-            MarkerKind::Context => "context",
-        }, m.start_line, m.end_line)).collect::<Vec<_>>().join(", "),
-        file_path.display()
-    );
-
     // Build the new content with marker lines removed.
     let lines: Vec<&str> = content.lines().collect();
     let had_trailing_newline = content.ends_with('\n');
@@ -198,7 +189,7 @@ where
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
 
     let all_markers = crate::markers::find_markers(&content_before, alias);
-    if all_markers.is_empty() {
+    if all_markers.iter().filter(|m| m.kind != MarkerKind::Context).count() == 0 {
         return Ok(0);
     }
 
@@ -222,12 +213,6 @@ where
     let context_markers: Vec<_> = all_markers.iter()
         .filter(|m| m.kind == MarkerKind::Context)
         .collect();
-
-    // If there are no task markers (only context), nothing to do but clean up.
-    if task_markers.is_empty() {
-        let removed = remove_remaining_markers(file_path, alias)?;
-        return Ok(removed);
-    }
 
     println!(
         "Found {} marker(s) in {} ({} task{}, {} context)",
@@ -401,7 +386,11 @@ where
                     "read_file" => {
                         if let Some(obj) = tool_call.function.arguments.as_object() {
                             if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                                path.to_string()
+                                if path.starts_with('/') {
+                                    "<rejected>".to_string()
+                                } else {
+                                    path.to_string()
+                                }
                             } else {
                                 tool_call.function.arguments.to_string()
                             }
@@ -425,6 +414,21 @@ where
                                 old_len,
                                 new_len
                             )
+                        } else {
+                            tool_call.function.arguments.to_string()
+                        }
+                    }
+                    "write_file" => {
+                        if let Some(obj) = tool_call.function.arguments.as_object() {
+                            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                                if path.starts_with('/') {
+                                    "<rejected>".to_string()
+                                } else {
+                                    format!("{}", path)
+                                }
+                            } else {
+                                tool_call.function.arguments.to_string()
+                            }
                         } else {
                             tool_call.function.arguments.to_string()
                         }
