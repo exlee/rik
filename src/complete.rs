@@ -119,43 +119,53 @@ Rules:
   A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.")
 }
 
-/// Remove context-only marker lines from a file.
+/// Remove ALL remaining marker lines from a file (both Task and Context).
 ///
 /// Re-scans the current file content so line positions are accurate even after
-/// earlier edits shifted things. Only removes single-line context markers
-/// (`rik: /.../`). Multi-line blocks are never context markers.
-fn remove_context_markers(
+/// earlier edits shifted things. Removes single-line markers and the full span
+/// of multi-line markers (opening line through closing line, inclusive).
+///
+/// This guarantees that no marker remnants are left in the file after the
+/// agent finishes its work.
+fn remove_remaining_markers(
     file_path: &std::path::Path,
     alias: &str,
-    _initial_context: &[&crate::markers::FoundMarker],
-) -> anyhow::Result<()> {
-    let mut content = std::fs::read_to_string(file_path)
+) -> anyhow::Result<usize> {
+    let content = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
 
     // Re-scan so positions reflect any shifts from prior edits.
     let markers = crate::markers::find_markers(&content, alias);
-    let context_positions: Vec<usize> = markers.iter()
-        .filter(|m| m.kind == MarkerKind::Context)
-        .map(|m| m.start_line - 1) // Convert 1-based to 0-based index.
-        .collect();
+    if markers.is_empty() {
+        return Ok(0);
+    }
 
-    if context_positions.is_empty() {
-        return Ok(());
+    // Build the set of 0-based line indices to remove.
+    let mut remove_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for m in &markers {
+        for line in (m.start_line - 1)..=(m.end_line - 1) {
+            // 0-based inclusive range
+            remove_lines.insert(line);
+        }
     }
 
     println!(
-        "Removing {} context marker line(s) from {}",
-        context_positions.len(),
+        "Removing {} remaining marker(s) ({}) from {}",
+        markers.len(),
+        markers.iter().map(|m| format!("{}:{}-{}", match m.kind {
+            MarkerKind::Task => "task",
+            MarkerKind::Context => "context",
+        }, m.start_line, m.end_line)).collect::<Vec<_>>().join(", "),
         file_path.display()
     );
 
-    // Build the new content with context lines removed.
+    // Build the new content with marker lines removed.
     let lines: Vec<&str> = content.lines().collect();
     let had_trailing_newline = content.ends_with('\n');
     let kept: Vec<&str> = lines
         .iter()
         .enumerate()
-        .filter(|(idx, _)| !context_positions.contains(idx))
+        .filter(|(idx, _)| !remove_lines.contains(idx))
         .map(|(_, line)| *line)
         .collect();
 
@@ -164,12 +174,11 @@ fn remove_context_markers(
     if had_trailing_newline && !new_content.ends_with('\n') {
         new_content.push('\n');
     }
-    content = new_content;
 
-    std::fs::write(file_path, &content)
+    std::fs::write(file_path, &new_content)
         .with_context(|| format!("Failed to write cleaned file: {}", file_path.display()))?;
 
-    Ok(())
+    Ok(markers.len())
 }
 
 async fn process_file_markers<C>(
@@ -216,8 +225,8 @@ where
 
     // If there are no task markers (only context), nothing to do but clean up.
     if task_markers.is_empty() {
-        remove_context_markers(file_path, alias, &context_markers)?;
-        return Ok(context_markers.len());
+        let removed = remove_remaining_markers(file_path, alias)?;
+        return Ok(removed);
     }
 
     println!(
@@ -443,8 +452,9 @@ where
         }
     }
 
-    // Remove context marker lines from the file (they served their purpose).
-    remove_context_markers(file_path, alias, &context_markers)?;
+    // Remove ALL remaining markers from the file (both task and context).
+    // This guarantees cleanup even if the agent didn't replace every marker.
+    remove_remaining_markers(file_path, alias)?;
 
     // Show diff if the file changed.
     let content_after = std::fs::read_to_string(file_path)
