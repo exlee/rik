@@ -78,6 +78,13 @@ fn file_extension(path: &std::path::Path) -> &str {
         .unwrap_or("unknown")
 }
 
+fn display_tool_path(app_state: &AppState, path: &str) -> String {
+    match app_state.resolve_path(path) {
+        Ok(_) => path.to_string(),
+        Err(_) => format!("<denied: {path}>"),
+    }
+}
+
 /// Extract a window of lines around `center_line` (1-based).
 /// Returns the lines with line numbers prefixed.
 fn surrounding_lines(content: &str, center_line: usize, radius: usize) -> String {
@@ -383,11 +390,7 @@ where
                     "read_file" => {
                         if let Some(obj) = tool_call.function.arguments.as_object() {
                             if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                                if path.starts_with('/') {
-                                    "<rejected>".to_string()
-                                } else {
-                                    path.to_string()
-                                }
+                                display_tool_path(crate::state::get(), path)
                             } else {
                                 tool_call.function.arguments.to_string()
                             }
@@ -418,18 +421,14 @@ where
                     "write_file" => {
                         if let Some(obj) = tool_call.function.arguments.as_object() {
                             if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                                if path.starts_with('/') {
-                                    "<rejected>".to_string()
-                                } else {
-                                    path.to_string()
-                                }
+                                display_tool_path(crate::state::get(), path)
                             } else {
                                 "???".to_string()
                             }
                         } else {
                             "???".to_string()
                         }
-                    },
+                    }
                     "send_message" => continue,
                     _ => tool_call.function.arguments.to_string(),
                 };
@@ -546,6 +545,34 @@ pub async fn cmd_complete(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_tool_path_denies_paths_outside_watched_directory() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let state = AppState::new(dir.path().to_path_buf(), crate::config::Config::default())?;
+
+        assert_eq!(
+            display_tool_path(&state, "../outside.txt"),
+            "<denied: ../outside.txt>"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn display_tool_path_allows_absolute_paths_inside_watched_directory() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let state = AppState::new(dir.path().to_path_buf(), crate::config::Config::default())?;
+        let path = state.path.join("inside.txt");
+        let path = path.to_string_lossy();
+
+        assert_eq!(display_tool_path(&state, &path), path);
+        Ok(())
+    }
 }
 
 /// Compute a lightweight hash of file contents for change detection.
