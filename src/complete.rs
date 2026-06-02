@@ -429,7 +429,8 @@ where
                         } else {
                             "???".to_string()
                         }
-                    }
+                    },
+                    "send_message" => continue,
                     _ => tool_call.function.arguments.to_string(),
                 };
                 println!("[tool]: {} {}", tool_call.function.name, msg);
