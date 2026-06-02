@@ -1,10 +1,8 @@
-use std::fmt::Write;
-use std::path::Path;
-
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fmt::Write;
 
 // ---------------------------------------------------------------------------
 // ListFiles tool
@@ -13,7 +11,7 @@ use serde_json::json;
 /// Arguments for the list_files tool.
 #[derive(Deserialize)]
 pub struct ListFilesArgs {
-    /// Directory to list files from. Defaults to current working directory.
+    /// Directory to list files from. Defaults to the watched directory.
     pub path: Option<String>,
     /// Optional glob pattern to filter results (e.g. "**/*.rs").
     pub glob: Option<String>,
@@ -27,9 +25,20 @@ pub struct ListFilesError(String);
 /// A tool that lists files in a directory, respecting .gitignore and .ignore.
 /// Returns absolute paths.
 #[derive(Deserialize, Serialize)]
-pub struct ListFilesTool;
+pub struct ListFilesTool<'a> {
+    #[serde(skip, default = "crate::state::get")]
+    pub app_state: &'a crate::state::AppState,
+}
 
-impl Tool for ListFilesTool {
+impl Default for ListFilesTool<'static> {
+    fn default() -> Self {
+        Self {
+            app_state: crate::state::get(),
+        }
+    }
+}
+
+impl Tool for ListFilesTool<'_> {
     const NAME: &'static str = "list_files";
 
     type Error = ListFilesError;
@@ -47,7 +56,7 @@ impl Tool for ListFilesTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory to list from (default: current working directory)"
+                        "description": "Directory to list from (default: watched directory)"
                     },
                     "glob": {
                         "type": "string",
@@ -59,20 +68,11 @@ impl Tool for ListFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Validate the requested directory stays within cwd.
         let dir_arg = args.path.as_deref().unwrap_or(".");
-        let _validated = crate::helpers::validate_relative_path(dir_arg)
+        let root = self
+            .app_state
+            .resolve_path(dir_arg)
             .map_err(|e| ListFilesError(e.to_string()))?;
-
-        let root = Path::new(dir_arg);
-
-        let root = if root.is_relative() {
-            std::env::current_dir()
-                .map_err(|e| ListFilesError(e.to_string()))?
-                .join(root)
-        } else {
-            return Err(ListFilesError("Absolute paths are not allowed".to_string()));
-        };
 
         if !root.exists() {
             return Err(ListFilesError(format!("Directory not found: {dir_arg}")));
@@ -96,15 +96,10 @@ impl Tool for ListFilesTool {
             builder.overrides(glob);
         }
 
-        let cwd = std::env::current_dir().map_err(|e| ListFilesError(e.to_string()))?;
         let mut paths: Vec<String> = Vec::new();
         for entry in builder.build().filter_map(|e| e.ok()) {
             if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                if let Ok(rel) = entry.path().strip_prefix(&cwd) {
-                    paths.push(rel.display().to_string());
-                } else {
-                    paths.push(entry.path().display().to_string());
-                }
+                paths.push(entry.path().display().to_string());
             }
         }
 
@@ -123,6 +118,14 @@ impl Tool for ListFilesTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_state() -> crate::state::AppState {
+        crate::state::AppState::new(
+            std::env::current_dir().unwrap(),
+            crate::config::Config::default(),
+        )
+        .unwrap()
+    }
 
     /// Create a subdirectory under cwd and return its relative path.
     /// Caller is responsible for cleaning up.
@@ -148,7 +151,10 @@ mod tests {
         std::fs::create_dir(abs.join("sub"))?;
         std::fs::write(abs.join("sub").join("c.txt"), "c")?;
 
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some(rel.clone()),
@@ -158,6 +164,11 @@ mod tests {
 
         let files: Vec<&str> = result.lines().skip(1).collect();
         assert_eq!(files.len(), 3);
+        assert!(
+            files
+                .iter()
+                .all(|path| std::path::Path::new(path).is_absolute())
+        );
         assert!(result.contains("a.txt"));
         assert!(result.contains("b.rs"));
         assert!(result.contains("sub"));
@@ -173,7 +184,10 @@ mod tests {
         std::fs::write(abs.join("ignored.log"), "log")?;
         std::fs::write(abs.join(".ignore"), "*.log\n")?;
 
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some(rel.clone()),
@@ -195,7 +209,10 @@ mod tests {
         std::fs::write(abs.join("b.rs"), "b")?;
         std::fs::write(abs.join("c.rs"), "c")?;
 
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some(rel.clone()),
@@ -212,7 +229,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files_not_found() {
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some(".rik_test_nonexistent/dir".to_string()),
@@ -226,7 +246,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files_rejects_absolute_path() {
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some("/tmp".to_string()),
@@ -239,13 +262,16 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Absolute paths are not allowed")
+                .contains("outside watched directory")
         );
     }
 
     #[tokio::test]
     async fn test_list_files_rejects_path_traversal() {
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some("../../tmp".to_string()),
@@ -256,7 +282,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("escapes current directory"),
+            err.contains("outside watched directory"),
             "Expected path traversal rejection, got: {err}"
         );
     }
@@ -269,7 +295,10 @@ mod tests {
         let abs = std::env::current_dir().unwrap().join(&rel);
         std::fs::write(abs.join("a.txt"), "a")?;
 
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some(rel.clone()),
@@ -297,7 +326,10 @@ mod tests {
         std::fs::write(abs.join("a.txt"), "a")?;
         std::fs::write(abs.join("b.rs"), "b")?;
 
-        let tool = ListFilesTool;
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ListFilesArgs {
                 path: Some(rel.clone()),

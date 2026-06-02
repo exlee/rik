@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -36,9 +34,20 @@ impl From<std::io::Error> for WriteFileError {
 /// Returns an error if the file already exists.
 #[derive(Deserialize, Serialize)]
 #[allow(dead_code)]
-pub struct WriteFileTool;
+pub struct WriteFileTool<'a> {
+    #[serde(skip, default = "crate::state::get")]
+    pub app_state: &'a crate::state::AppState,
+}
 
-impl Tool for WriteFileTool {
+impl Default for WriteFileTool<'static> {
+    fn default() -> Self {
+        Self {
+            app_state: crate::state::get(),
+        }
+    }
+}
+
+impl Tool for WriteFileTool<'_> {
     const NAME: &'static str = "write_file";
 
     type Error = WriteFileError;
@@ -69,23 +78,29 @@ impl Tool for WriteFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let rel = crate::helpers::validate_relative_path(&args.path)
+        let path = self
+            .app_state
+            .resolve_path(&args.path)
             .map_err(|e| WriteFileError(e.to_string()))?;
-        let path = Path::new(&rel);
 
         if path.exists() {
-            return Err(WriteFileError(format!("File already exists: {rel}")));
+            return Err(WriteFileError(format!(
+                "File already exists: {}",
+                path.display()
+            )));
         }
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        std::fs::write(path, &args.content)?;
+        std::fs::write(&path, &args.content)?;
 
         Ok(format!(
-            "[write_file] path={} content={}\nSuccessfully created file: {rel}",
-            rel, args.content
+            "[write_file] path={} content={}\nSuccessfully created file: {}",
+            path.display(),
+            args.content,
+            path.display()
         ))
     }
 }
@@ -93,6 +108,14 @@ impl Tool for WriteFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_state() -> crate::state::AppState {
+        crate::state::AppState::new(
+            std::env::current_dir().unwrap(),
+            crate::config::Config::default(),
+        )
+        .unwrap()
+    }
 
     /// Create a subdirectory under cwd and return its relative path.
     /// Caller is responsible for cleaning up.
@@ -116,7 +139,10 @@ mod tests {
         let rel_file = format!("{}/subdir/new_file.txt", rel);
         let abs_file = abs.join("subdir").join("new_file.txt");
 
-        let tool = WriteFileTool;
+        let app_state = app_state();
+        let tool = WriteFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(WriteFileArgs {
                 path: rel_file.clone(),
@@ -138,7 +164,10 @@ mod tests {
         let abs_file = abs.join("existing.txt");
         std::fs::write(&abs_file, "old")?;
 
-        let tool = WriteFileTool;
+        let app_state = app_state();
+        let tool = WriteFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(WriteFileArgs {
                 path: rel_file,
@@ -154,7 +183,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_rejects_absolute_path() {
-        let tool = WriteFileTool;
+        let app_state = app_state();
+        let tool = WriteFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(WriteFileArgs {
                 path: "/tmp/evil.txt".to_string(),
@@ -167,13 +199,16 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Absolute paths are not allowed")
+                .contains("outside watched directory")
         );
     }
 
     #[tokio::test]
     async fn test_write_file_rejects_path_traversal() {
-        let tool = WriteFileTool;
+        let app_state = app_state();
+        let tool = WriteFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(WriteFileArgs {
                 path: "../../etc/evil.txt".to_string(),
@@ -184,7 +219,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("escapes current directory"),
+            err.contains("outside watched directory"),
             "Expected path traversal rejection, got: {err}"
         );
     }
@@ -196,7 +231,10 @@ mod tests {
         let _ = abs.join("output.txt"); // suppress unused warning on abs
         let content = "hello world";
 
-        let tool = WriteFileTool;
+        let app_state = app_state();
+        let tool = WriteFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(WriteFileArgs {
                 path: rel_file.clone(),

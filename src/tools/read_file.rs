@@ -1,10 +1,8 @@
-use std::fmt::Write;
-use std::path::Path;
-
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fmt::Write;
 
 // ---------------------------------------------------------------------------
 // ReadFile tool
@@ -34,9 +32,20 @@ impl From<std::io::Error> for ReadFileError {
 
 /// A tool that reads the contents of an existing file.
 #[derive(Deserialize, Serialize)]
-pub struct ReadFileTool;
+pub struct ReadFileTool<'a> {
+    #[serde(skip, default = "crate::state::get")]
+    pub app_state: &'a crate::state::AppState,
+}
 
-impl Tool for ReadFileTool {
+impl Default for ReadFileTool<'static> {
+    fn default() -> Self {
+        Self {
+            app_state: crate::state::get(),
+        }
+    }
+}
+
+impl Tool for ReadFileTool<'_> {
     const NAME: &'static str = "read_file";
 
     type Error = ReadFileError;
@@ -72,15 +81,16 @@ impl Tool for ReadFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let rel = crate::helpers::validate_relative_path(&args.path)
+        let path = self
+            .app_state
+            .resolve_path(&args.path)
             .map_err(|e| ReadFileError(e.to_string()))?;
-        let path = Path::new(&rel);
 
         if !path.exists() {
-            return Err(ReadFileError(format!("File not found: {rel}")));
+            return Err(ReadFileError(format!("File not found: {}", path.display())));
         }
 
-        let content = std::fs::read_to_string(path)?;
+        let content = std::fs::read_to_string(&path)?;
 
         let lines: Vec<&str> = content.lines().collect();
 
@@ -96,7 +106,7 @@ impl Tool for ReadFileTool {
         }
 
         let result: Vec<&str> = lines[start..end].to_vec();
-        let mut header = format!("[read_file] path={rel}");
+        let mut header = format!("[read_file] path={}", path.display());
         if let Some(offset) = args.offset {
             write!(header, " offset={offset}").ok();
         }
@@ -110,6 +120,14 @@ impl Tool for ReadFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_state() -> crate::state::AppState {
+        crate::state::AppState::new(
+            std::env::current_dir().unwrap(),
+            crate::config::Config::default(),
+        )
+        .unwrap()
+    }
 
     /// Create a subdirectory under cwd and return its relative path.
     /// Caller is responsible for cleaning up.
@@ -134,7 +152,10 @@ mod tests {
         let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2\nline3")?;
 
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -145,7 +166,10 @@ mod tests {
 
         assert_eq!(
             result,
-            format!("[read_file] path={}\nline1\nline2\nline3", rel_file)
+            format!(
+                "[read_file] path={}\nline1\nline2\nline3",
+                file_path.display()
+            )
         );
         cleanup_rel(&rel);
         Ok(())
@@ -158,7 +182,10 @@ mod tests {
         let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5")?;
 
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -177,7 +204,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_not_found() {
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: ".rik_test_nonexistent/file.txt".to_string(),
@@ -192,7 +222,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_rejects_absolute_path() {
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: "/etc/hosts".to_string(),
@@ -206,13 +239,16 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Absolute paths are not allowed")
+                .contains("outside watched directory")
         );
     }
 
     #[tokio::test]
     async fn test_read_file_rejects_path_traversal() {
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: "../../etc/passwd".to_string(),
@@ -224,7 +260,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("escapes current directory"),
+            err.contains("outside watched directory"),
             "Expected path traversal rejection, got: {err}"
         );
     }
@@ -236,7 +272,10 @@ mod tests {
         let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2")?;
 
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -266,7 +305,10 @@ mod tests {
         let rel_file = format!("{}/test.txt", rel);
         std::fs::write(&file_path, "line1\nline2\nline3")?;
 
-        let tool = ReadFileTool;
+        let app_state = app_state();
+        let tool = ReadFileTool {
+            app_state: &app_state,
+        };
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),

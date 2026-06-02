@@ -5,9 +5,10 @@ use rig::client::CompletionClient;
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use std::io::Write;
 
-use crate::config::{Config, ModelConfig, Provider};
+use crate::config::{ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
+use crate::state::AppState;
 use crate::{cleanup, personality, raii, tools};
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ macro_rules! define_provider_dispatch {
     ) => {
         /// Dispatch to the correct handler based on the configured provider.
         async fn scan_and_complete_dispatch(
+            app_state: &AppState,
             cfg: &ModelConfig,
             alias: &str,
             diff_tool: Option<&Vec<String>>,
@@ -37,6 +39,7 @@ macro_rules! define_provider_dispatch {
                         let client = crate::helpers::$fn_name(cfg)
                             .with_context(|| format!("Failed to build {:?} client", Provider::$variant))?;
                         process_scan_and_complete::<$client_type>(
+                            app_state,
                             &client,
                             &cfg.model,
                             alias,
@@ -235,17 +238,6 @@ where
 
     // Build a single prompt with all markers.
     let file_display = file_path.display().to_string();
-    // Use a relative path for the target so tool output is clean.
-    let target_rel: String = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| {
-            file_path
-                .strip_prefix(&cwd)
-                .ok()
-                .map(|p| p.display().to_string())
-        })
-        .unwrap_or_else(|| file_display.clone());
-
     // Build blocks for task markers (things the agent must do).
     let tasks_block = task_markers
         .iter()
@@ -294,14 +286,15 @@ where
     let agent_builder = comp_client
         .agent(model_name)
         .preamble(&preamble)
-        .tool(tools::ReadFileTool)
+        .tool(tools::ReadFileTool::default())
         .tool(tools::EditFileTool {
-            target_path: target_rel,
+            app_state: crate::state::get(),
+            target_path: file_display,
             alias: alias.to_string(),
         })
         .tool(tools::SendMessageTool)
-        .tool(tools::ListFilesTool)
-        .tool(tools::WriteFileTool)
+        .tool(tools::ListFilesTool::default())
+        .tool(tools::WriteFileTool::default())
         .default_max_turns(30);
 
     let agent = agent_builder.build();
@@ -490,6 +483,7 @@ where
 }
 
 async fn process_scan_and_complete<C>(
+    app_state: &AppState,
     comp_client: &C,
     model_name: &str,
     alias: &str,
@@ -502,7 +496,7 @@ where
     C: CompletionClient,
     C::CompletionModel: 'static,
 {
-    let files = expand_glob(pattern)?;
+    let files = expand_glob(app_state, pattern)?;
     if files.is_empty() {
         anyhow::bail!("No files matched pattern: {pattern}");
     }
@@ -526,13 +520,15 @@ where
 
 /// Single-pass completion: scan once, process all markers.
 pub async fn cmd_complete(
-    config: &Config,
+    app_state: &AppState,
     alias: &str,
     pattern: String,
     verbose: bool,
 ) -> anyhow::Result<()> {
+    let config = &app_state.config;
     let diff_tool = config.diff_tool.as_ref();
     let count = scan_and_complete_dispatch(
+        app_state,
         &config.model,
         alias,
         diff_tool,
@@ -551,21 +547,6 @@ pub async fn cmd_complete(
     Ok(())
 }
 
-/// Compute the common ancestor directory of two paths.
-fn common_ancestor(a: &std::path::Path, b: &std::path::Path) -> std::path::PathBuf {
-    let a_components = a.components();
-    let b_components = b.components();
-    let mut common = std::path::PathBuf::new();
-    for (ca, cb) in a_components.zip(b_components) {
-        if ca == cb {
-            common.push(ca);
-        } else {
-            break;
-        }
-    }
-    common
-}
-
 /// Compute a lightweight hash of file contents for change detection.
 fn content_hash(path: &std::path::Path) -> Option<u64> {
     use std::hash::{Hash, Hasher};
@@ -576,9 +557,12 @@ fn content_hash(path: &std::path::Path) -> Option<u64> {
 }
 
 /// Snapshot hashes of all files matching the glob pattern.
-fn snapshot_hashes(pattern: &str) -> std::collections::HashMap<std::path::PathBuf, u64> {
+fn snapshot_hashes(
+    app_state: &AppState,
+    pattern: &str,
+) -> std::collections::HashMap<std::path::PathBuf, u64> {
     let mut hashes = std::collections::HashMap::new();
-    if let Ok(files) = crate::helpers::expand_glob(pattern) {
+    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern) {
         for path in files {
             if let Some(h) = content_hash(&path) {
                 hashes.insert(path, h);
@@ -590,8 +574,12 @@ fn snapshot_hashes(pattern: &str) -> std::collections::HashMap<std::path::PathBu
 
 /// Check whether any file matching the glob has changed since `prev`.
 /// Returns true if at least one file has a different hash or is new.
-fn files_changed(pattern: &str, prev: &std::collections::HashMap<std::path::PathBuf, u64>) -> bool {
-    if let Ok(files) = crate::helpers::expand_glob(pattern) {
+fn files_changed(
+    app_state: &AppState,
+    pattern: &str,
+    prev: &std::collections::HashMap<std::path::PathBuf, u64>,
+) -> bool {
+    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern) {
         for path in &files {
             match content_hash(path) {
                 Some(h) => match prev.get(path) {
@@ -613,7 +601,7 @@ fn files_changed(pattern: &str, prev: &std::collections::HashMap<std::path::Path
 
 /// Watch mode: continuously monitor files for new/changed markers.
 pub async fn cmd_watch(
-    config: &Config,
+    app_state: &AppState,
     alias: &str,
     pattern: String,
     verbose: bool,
@@ -621,23 +609,7 @@ pub async fn cmd_watch(
     use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
     use std::sync::mpsc;
 
-    // Expand the glob to find actual files, then derive a watch root.
-    let mut watch_path = crate::helpers::expand_glob(&pattern)
-        .context("Failed to expand glob pattern")?
-        .into_iter()
-        .fold(None, |acc: Option<std::path::PathBuf>, path| match acc {
-            None => Some(path.as_path().to_path_buf()),
-            Some(base) => Some(common_ancestor(&base, path.as_path())),
-        })
-        .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
-
-    // Ensure we watch a directory, not a file.
-    while !watch_path.is_dir() {
-        watch_path = watch_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-    }
+    let watch_path = &app_state.path;
 
     println!(
         "Watching {} for '{alias}:' markers (pattern: {pattern})...",
@@ -647,12 +619,14 @@ pub async fn cmd_watch(
 
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = recommended_watcher(tx)?;
-    watcher.watch(&watch_path, RecursiveMode::Recursive)?;
+    watcher.watch(watch_path, RecursiveMode::Recursive)?;
 
+    let config = &app_state.config;
     let diff_tool = config.diff_tool.as_ref();
 
     // Initial scan — always run, then snapshot hashes.
     let _ = scan_and_complete_dispatch(
+        app_state,
         &config.model,
         alias,
         diff_tool,
@@ -661,7 +635,7 @@ pub async fn cmd_watch(
         config.personality,
     )
     .await;
-    let mut prev_hashes = snapshot_hashes(&pattern);
+    let mut prev_hashes = snapshot_hashes(app_state, &pattern);
 
     loop {
         if crate::keyboard::should_stop() {
@@ -678,11 +652,12 @@ pub async fn cmd_watch(
                 while rx.try_recv().is_ok() {}
 
                 // Skip processing if no file content has actually changed.
-                if !files_changed(&pattern, &prev_hashes) {
+                if !files_changed(app_state, &pattern, &prev_hashes) {
                     continue;
                 }
 
                 if let Err(e) = scan_and_complete_dispatch(
+                    app_state,
                     &config.model,
                     alias,
                     diff_tool,
@@ -694,7 +669,7 @@ pub async fn cmd_watch(
                 {
                     eprintln!("Watch error: {e:?}");
                 }
-                prev_hashes = snapshot_hashes(&pattern);
+                prev_hashes = snapshot_hashes(app_state, &pattern);
             }
             Ok(Err(e)) => {
                 eprintln!("Watch error: {e}");

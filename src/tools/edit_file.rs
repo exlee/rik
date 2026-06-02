@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -45,14 +43,16 @@ impl From<std::io::Error> for EditFileError {
 ///   marker span. Marker positions are re-read from disk on every call so they
 ///   stay correct even after earlier edits shift line numbers.
 #[derive(Deserialize, Serialize)]
-pub struct EditFileTool {
+pub struct EditFileTool<'a> {
+    #[serde(skip, default = "crate::state::get")]
+    pub app_state: &'a crate::state::AppState,
     /// The file this tool is allowed to edit (set at construction time).
     pub target_path: String,
     /// Marker alias used to scan the file for current marker positions.
     pub alias: String,
 }
 
-impl Tool for EditFileTool {
+impl Tool for EditFileTool<'_> {
     const NAME: &'static str = "edit_file";
 
     type Error = EditFileError;
@@ -67,7 +67,7 @@ impl Tool for EditFileTool {
              Only this file may be edited and edits must be within {} lines of a marker.",
             self.target_path, MARKER_RADIUS,
         );
-        if crate::config::get().marker_limits_edition_range {
+        if self.app_state.config.marker_limits_edition_range {
             desc.push_str(" When multiple markers are present, the edit span has to end before the next marker.");
         }
         ToolDefinition {
@@ -91,7 +91,10 @@ impl Tool for EditFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = Path::new(&self.target_path);
+        let path = self
+            .app_state
+            .resolve_path(&self.target_path)
+            .map_err(|e| EditFileError(e.to_string()))?;
 
         if !path.exists() {
             return Err(EditFileError(format!(
@@ -100,7 +103,7 @@ impl Tool for EditFileTool {
             )));
         }
 
-        let content = std::fs::read_to_string(path)?;
+        let content = std::fs::read_to_string(&path)?;
 
         // Re-scan markers from current file content so positions are always fresh.
         // Only task markers count as edit anchors; context markers do not.
@@ -133,7 +136,7 @@ impl Tool for EditFileTool {
                     )));
                 }
 
-                if crate::config::get().marker_limits_edition_range
+                if self.app_state.config.marker_limits_edition_range
                     && is_edit_over_marker(&marker_spans, &content, pos, &args.old_text)
                 {
                     return Err(EditFileError(
@@ -148,7 +151,7 @@ impl Tool for EditFileTool {
                 new_content.push_str(&args.new_text);
                 new_content.push_str(&content[pos + args.old_text.len()..]);
 
-                std::fs::write(path, &new_content)?;
+                std::fs::write(&path, &new_content)?;
 
                 Ok(format!(
                     "[edit_file] path={} input_len={} output_len={}\nEdited {}",
@@ -238,13 +241,20 @@ mod tests {
         lines.insert(idx, "rik: do something".to_string());
     }
 
-    fn make_tool(file_path: &std::path::Path) -> EditFileTool {
+    fn make_tool(file_path: &std::path::Path) -> EditFileTool<'static> {
+        let app_state = Box::leak(Box::new(
+            crate::state::AppState::new(
+                file_path.parent().unwrap().to_path_buf(),
+                crate::config::Config::default(),
+            )
+            .unwrap(),
+        ));
         EditFileTool {
+            app_state,
             target_path: file_path.display().to_string(),
             alias: "rik".to_string(),
         }
     }
-
 
     // Note: this tests checks for default only (i.e. so that limit is enabled)
     //       might require some testing tricks instead
@@ -285,6 +295,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_injected_config_can_allow_edit_over_two_markers() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(
+            &file_path,
+            "before\nrik: first task\nmiddle content\nrik: second task\nafter\n",
+        )?;
+        let mut config = crate::config::Config::default();
+        config.marker_limits_edition_range = false;
+        let app_state = crate::state::AppState::new(dir.path().to_path_buf(), config)?;
+        let tool = EditFileTool {
+            app_state: &app_state,
+            target_path: file_path.display().to_string(),
+            alias: "rik".to_string(),
+        };
+
+        tool.call(EditFileArgs {
+            old_text: "rik: first task\nmiddle content\nrik: second task".into(),
+            new_text: "replaced everything".into(),
+        })
+        .await?;
+
+        assert!(std::fs::read_to_string(file_path)?.contains("replaced everything"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_edit_file_replace_line() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test.txt");
@@ -304,7 +341,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_not_found() {
+        let app_state = crate::state::AppState::new(
+            std::env::current_dir().unwrap(),
+            crate::config::Config::default(),
+        )
+        .unwrap();
         let tool = EditFileTool {
+            app_state: &app_state,
             target_path: "/nonexistent".to_string(),
             alias: "rik".to_string(),
         };
@@ -315,7 +358,12 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("File not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("outside watched directory")
+        );
     }
 
     #[tokio::test]
@@ -497,7 +545,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_definition_includes_file_path() -> anyhow::Result<()> {
+        let app_state = crate::state::AppState::new(
+            std::env::current_dir()?,
+            crate::config::Config::default(),
+        )?;
         let tool = EditFileTool {
+            app_state: &app_state,
             target_path: "src/main.rs".to_string(),
             alias: "rik".to_string(),
         };

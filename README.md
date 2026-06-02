@@ -272,7 +272,7 @@ rik gives the agent three tools during processing:
 | `write_file` | Create new files (refuses to overwrite existing ones). |
 | `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
 
-All file tools are sandboxed to the current working directory. The agent can chain these tools across up to 20 turns before producing final edits.
+All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 20 turns before producing final edits.
 
 ## Guardrails
 

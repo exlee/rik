@@ -35,11 +35,24 @@ pub struct Config {
     /// Enable personality mode. When enabled, Rik will be more chatty about his work.
     #[serde(default)]
     pub personality: bool,
-    #[serde(default="bool_true")]
+    #[serde(default = "bool_true")]
     pub marker_limits_edition_range: bool,
 }
 
-pub fn bool_true() -> bool { true }
+pub fn bool_true() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            model: ModelConfig::default(),
+            diff_tool: None,
+            personality: false,
+            marker_limits_edition_range: true,
+        }
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct ModelConfig {
@@ -83,6 +96,17 @@ pub struct ModelConfig {
     pub model: String,
 }
 
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            provider: Provider::default(),
+            url: None,
+            api_key: None,
+            model: String::new(),
+        }
+    }
+}
+
 fn find_config_path() -> Option<std::path::PathBuf> {
     // Try ~/.config/rik/rik.toml first (Linux-style, works everywhere)
     if let Some(home) = dirs::home_dir() {
@@ -94,12 +118,6 @@ fn find_config_path() -> Option<std::path::PathBuf> {
 
     // Fall back to platform-specific config dir
     dirs::config_dir().map(|d| d.join("rik").join("rik.toml"))
-}
-
-static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
-
-pub fn get() -> &'static Config {
-    CONFIG.get_or_init(|| load().expect("Failed to load config"))
 }
 
 pub fn load() -> anyhow::Result<Config> {

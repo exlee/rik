@@ -194,38 +194,87 @@ fn format_provider_name(p: Provider) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Path safety helpers
-// ---------------------------------------------------------------------------
-
-/// Validate that `raw` resolves within the current working directory.
-/// Returns the validated relative path string, or an error describing why
-/// the path was rejected.
-pub fn validate_relative_path(raw: &str) -> Result<String> {
-    let path = std::path::Path::new(raw);
-
-    // Reject absolute paths
-    if path.is_absolute() {
-        anyhow::bail!("Absolute paths are not allowed: {}", raw);
-    }
-
-    // Reject any path component that escapes upwards.
-    for component in path.components() {
-        if component == std::path::Component::ParentDir {
-            anyhow::bail!("Path escapes current directory (contains '..'): {}", raw);
-        }
-    }
-
-    // Return the original relative path (already safe after checks above).
-    Ok(raw.trim_start_matches("./").to_string())
-}
-
-// ---------------------------------------------------------------------------
 // Glob / diff helpers (unchanged)
 // ---------------------------------------------------------------------------
 
+/// Derive the directory watched by a pattern.
+///
+/// Relative patterns watch the current working directory. Absolute patterns
+/// watch their absolute directory scope. Multiple comma-separated patterns use
+/// their common ancestor.
+pub fn watched_directory(pattern: &str) -> Result<std::path::PathBuf> {
+    let mut watched: Option<std::path::PathBuf> = None;
+
+    for part in pattern.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        let path = std::path::Path::new(part);
+        let root = if path.is_absolute() {
+            absolute_pattern_directory(path)?
+        } else {
+            std::env::current_dir()
+                .context("Failed to determine current working directory")?
+                .canonicalize()
+                .context("Failed to resolve current working directory")?
+        };
+
+        watched = Some(match watched {
+            Some(current) => common_ancestor(&current, &root),
+            None => root,
+        });
+    }
+
+    watched.ok_or_else(|| anyhow::anyhow!("Pattern must not be empty"))
+}
+
+fn absolute_pattern_directory(path: &std::path::Path) -> Result<std::path::PathBuf> {
+    let part = path.display();
+    let mut root = std::path::PathBuf::new();
+    let mut has_glob = false;
+    for component in path.components() {
+        if component
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .any(|c| matches!(c, '*' | '?' | '['))
+        {
+            has_glob = true;
+            break;
+        }
+        root.push(component.as_os_str());
+    }
+    if !has_glob && !root.is_dir() {
+        root.pop();
+    }
+    while !root.is_dir() {
+        if !root.pop() {
+            anyhow::bail!("Could not determine watched directory for pattern: {part}");
+        }
+    }
+    root.canonicalize()
+        .with_context(|| format!("Failed to resolve watched directory: {}", root.display()))
+}
+
+fn common_ancestor(a: &std::path::Path, b: &std::path::Path) -> std::path::PathBuf {
+    let mut common = std::path::PathBuf::new();
+    for (a, b) in a.components().zip(b.components()) {
+        if a != b {
+            break;
+        }
+        common.push(a.as_os_str());
+    }
+    common
+}
+
 /// Expand one or more comma-separated glob patterns into a list of file paths.
 /// Each segment is trimmed before expansion.
-pub fn expand_glob(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
+pub fn expand_glob(
+    app_state: &crate::state::AppState,
+    pattern: &str,
+) -> Result<Vec<std::path::PathBuf>> {
     let mut results: Vec<std::path::PathBuf> = Vec::new();
 
     for part in pattern.split(',') {
@@ -235,20 +284,22 @@ pub fn expand_glob(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
         }
 
         // If the part is a literal existing file, return it directly.
-        let path = std::path::Path::new(part);
+        let path = app_state.resolve_path(part)?;
         if path.is_file() {
-            results.push(path.to_path_buf());
+            results.push(path);
             continue;
         }
 
         // Otherwise treat as a glob pattern.
         use glob::glob;
-        let matches = glob(part).with_context(|| format!("Invalid glob pattern: {part}"))?;
-        results.extend(
-            matches
-                .filter_map(|entry| entry.ok())
-                .filter(|p| p.is_file()),
-        );
+        let matches = glob(path.to_string_lossy().as_ref())
+            .with_context(|| format!("Invalid glob pattern: {part}"))?;
+        for entry in matches
+            .filter_map(|entry| entry.ok())
+            .filter(|p| p.is_file())
+        {
+            results.push(app_state.resolve_path(entry.to_string_lossy().as_ref())?);
+        }
     }
 
     Ok(results)
@@ -350,5 +401,58 @@ pub fn run_diff(args: &[String], label: &str, old_content: &str, new_content: &s
             }
             Err(e) => format!("Failed to run diff tool '{}': {e}", resolved[0]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watched_directory_uses_absolute_glob_prefix_even_without_matches() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let src = dir.path().join("project").join("src");
+        std::fs::create_dir_all(&src)?;
+        let pattern = src.join("**").join("*.rs");
+
+        assert_eq!(
+            watched_directory(pattern.to_string_lossy().as_ref())?,
+            src.canonicalize()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watched_directory_uses_cwd_for_relative_pattern() -> anyhow::Result<()> {
+        assert_eq!(
+            watched_directory("src/**/*.rs")?,
+            std::env::current_dir()?.canonicalize()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watched_directory_uses_cwd_for_dot_relative_pattern() -> anyhow::Result<()> {
+        assert_eq!(
+            watched_directory("./src/**/*.rs")?,
+            std::env::current_dir()?.canonicalize()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watched_directory_uses_common_ancestor_for_multiple_patterns() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join("src"))?;
+        std::fs::create_dir_all(project.join("tests"))?;
+        let pattern = format!(
+            "{}/**/*.rs,{}/**/*.rs",
+            project.join("src").display(),
+            project.join("tests").display()
+        );
+
+        assert_eq!(watched_directory(&pattern)?, project.canonicalize()?);
+        Ok(())
     }
 }

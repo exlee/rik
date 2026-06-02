@@ -8,6 +8,7 @@ mod keyboard;
 mod markers;
 mod personality;
 mod raii;
+mod state;
 mod tools;
 
 #[derive(Parser)]
@@ -47,7 +48,9 @@ async fn main() -> anyhow::Result<()> {
         config.personality = true;
     }
 
-    print_motd(&cli.alias, &config);
+    let state = state::init_for_pattern(&cli.pattern, config)?;
+
+    print_motd(&cli.alias, &state.config);
     let _ = ctrlc::set_handler(|| {
         cleanup::cleanup();
         std::process::exit(0);
@@ -55,9 +58,9 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.watch {
         crate::keyboard::start_space_listener();
-        complete::cmd_watch(&config, &cli.alias, cli.pattern, cli.verbose).await
+        complete::cmd_watch(state, &cli.alias, cli.pattern, cli.verbose).await
     } else {
-        complete::cmd_complete(&config, &cli.alias, cli.pattern, cli.verbose).await
+        complete::cmd_complete(state, &cli.alias, cli.pattern, cli.verbose).await
     }
 }
 
