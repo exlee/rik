@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`marker_limits_edition_range` config** — when enabled (default), `edit_file` rejects edits whose text spans across multiple markers, ensuring each edit stays scoped to a single marker region
+
 ## [0.2.1] - 2026-05-30
 
 ### Added
