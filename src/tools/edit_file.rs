@@ -60,13 +60,16 @@ impl Tool for EditFileTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let desc = format!(
+        let mut desc = format!(
             "Edit {} by replacing exact text. \
              old_text must match exactly one occurrence in the file. \
              That text is replaced with new_text. \
              Only this file may be edited and edits must be within {} lines of a marker.",
             self.target_path, MARKER_RADIUS,
         );
+        if crate::config::get().marker_limits_edition_range {
+            desc.push_str(" When multiple markers are present, the edit span has to end before the next marker.");
+        }
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: desc,
@@ -130,6 +133,14 @@ impl Tool for EditFileTool {
                     )));
                 }
 
+                if crate::config::get().marker_limits_edition_range
+                    && is_edit_over_marker(&marker_spans, &content, pos, &args.old_text)
+                {
+                    return Err(EditFileError(
+                        "Edit rejected: edits must end before the following marker.".to_string(),
+                    ));
+                }
+
                 let mut new_content = String::with_capacity(
                     content.len() - args.old_text.len() + args.new_text.len(),
                 );
@@ -149,6 +160,30 @@ impl Tool for EditFileTool {
             }
         }
     }
+}
+// If the marker is on the first line, skip it — there's no preceding content
+// so an edit cannot meaningfully "overlap" a marker that starts the file.
+fn is_edit_over_marker(
+    marker_spans: &[(usize, usize)],
+    content: &str,
+    pos: usize,
+    old_text: &str,
+) -> bool {
+    let edit_start_line = byte_offset_to_line(content, pos);
+    let edit_end_line = byte_offset_to_line(content, pos + old_text.len().saturating_sub(1));
+
+    for &(start, end) in marker_spans {
+        if start == edit_start_line {
+            continue;
+        }
+        if edit_start_line >= start && edit_start_line <= end {
+            return true;
+        }
+        if edit_end_line >= start && edit_end_line <= end {
+            return true;
+        }
+    }
+    false
 }
 
 /// Check whether the edit's start or end line falls within `MARKER_RADIUS`
@@ -208,6 +243,45 @@ mod tests {
             target_path: file_path.display().to_string(),
             alias: "rik".to_string(),
         }
+    }
+
+
+    // Note: this tests checks for default only (i.e. so that limit is enabled)
+    //       might require some testing tricks instead
+    #[tokio::test]
+    async fn test_edit_over_two_markers_rejected() -> anyhow::Result<()> {
+        // With marker_limits_edition_range enabled (the default), an edit whose
+        // text spans two markers must be rejected.
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        // Two markers with unique content between them so old_text matches exactly once.
+        std::fs::write(
+            &file_path,
+            "before\nrik: first task\nmiddle content\nrik: second task\nafter\n",
+        )?;
+
+        let tool = make_tool(&file_path);
+        // Try to replace text that spans across both markers.
+        let result = tool
+            .call(EditFileArgs {
+                old_text: "rik: first task\nmiddle content\nrik: second task".into(),
+                new_text: "replaced everything".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("edits must end before the following marker"),
+            "Expected rejection when edit spans two markers, got: {err}"
+        );
+
+        // File must be unchanged
+        let content = std::fs::read_to_string(&file_path)?;
+        assert!(content.contains("rik: first task"));
+        assert!(content.contains("middle content"));
+        assert!(content.contains("rik: second task"));
+        Ok(())
     }
 
     #[tokio::test]

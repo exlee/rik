@@ -35,7 +35,11 @@ pub struct Config {
     /// Enable personality mode. When enabled, Rik will be more chatty about his work.
     #[serde(default)]
     pub personality: bool,
+    #[serde(default="bool_true")]
+    pub marker_limits_edition_range: bool,
 }
+
+pub fn bool_true() -> bool { true }
 
 #[derive(Deserialize, Debug)]
 pub struct ModelConfig {
@@ -90,6 +94,12 @@ fn find_config_path() -> Option<std::path::PathBuf> {
 
     // Fall back to platform-specific config dir
     dirs::config_dir().map(|d| d.join("rik").join("rik.toml"))
+}
+
+static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+
+pub fn get() -> &'static Config {
+    CONFIG.get_or_init(|| load().expect("Failed to load config"))
 }
 
 pub fn load() -> anyhow::Result<Config> {
