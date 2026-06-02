@@ -299,6 +299,7 @@ where
             target_path: target_rel,
             alias: alias.to_string(),
         })
+        .tool(tools::SendMessageTool)
         .tool(tools::ListFilesTool)
         .tool(tools::WriteFileTool)
         .default_max_turns(30);
