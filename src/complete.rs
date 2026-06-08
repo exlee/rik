@@ -315,7 +315,10 @@ fn remove_context_markers(file_path: &std::path::Path, alias: &str) -> anyhow::R
     let markers = crate::markers::find_markers(&content, alias);
     let remove_lines: std::collections::HashSet<_> = markers
         .iter()
-        .filter(|marker| marker.kind == MarkerKind::Context)
+        .filter(|marker| {
+            marker.kind == MarkerKind::Context
+                && !crate::markers::is_stopped(&content, alias, marker)
+        })
         .flat_map(|marker| marker.start_line..=marker.end_line)
         .collect();
     if remove_lines.is_empty() {
@@ -357,31 +360,23 @@ where
     let all_markers = crate::markers::find_markers(&content_before, alias);
     if all_markers
         .iter()
-        .filter(|m| m.kind != MarkerKind::Context)
+        .filter(|marker| {
+            marker.kind == MarkerKind::Task
+                && !crate::markers::is_stopped(&content_before, alias, marker)
+        })
         .count()
         == 0
     {
         return Ok(ScanOutcome::default());
     }
 
-    let halt_tags = [format!("!{alias}"), format!("{alias}!")];
-    for halt_tag in halt_tags {
-        if content_before.lines().any(|line| line.contains(&halt_tag)) {
-            println!(
-                "Found {} marker(s) in {} — skipped ({} guard present)",
-                all_markers.len(),
-                file_path.display(),
-                halt_tag
-            );
-            return Ok(ScanOutcome::default());
-        }
-    }
-
     let Some(task_marker) = all_markers
         .iter()
         .filter(|marker| marker.kind == MarkerKind::Task)
         .find(|marker| {
-            !is_question_marker(marker) || !app_state.question_was_answered(file_path, marker)
+            !crate::markers::is_stopped(&content_before, alias, marker)
+                && (!is_question_marker(marker)
+                    || !app_state.question_was_answered(file_path, marker))
         })
         .cloned()
     else {
@@ -408,7 +403,10 @@ where
 
     let context_markers: Vec<_> = all_markers
         .iter()
-        .filter(|m| m.kind == MarkerKind::Context)
+        .filter(|marker| {
+            marker.kind == MarkerKind::Context
+                && !crate::markers::is_stopped(&content_before, alias, marker)
+        })
         .collect();
 
     println!(
@@ -853,6 +851,24 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&file)?,
             "rik: why?\nrik: second task\ncontent\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn context_cleanup_leaves_stopped_context_markers() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        std::fs::write(
+            &file,
+            "!rik: /keep this context/\nrik: /remove this context/\ncontent\n",
+        )?;
+
+        remove_context_markers(&file, "rik")?;
+
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "!rik: /keep this context/\ncontent\n"
         );
         Ok(())
     }

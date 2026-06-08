@@ -325,15 +325,19 @@ Normal edit tasks can use them automatically. Questions must explicitly opt in w
 
 ## Guardrails
 
-### Halt marker
+### Marker stoppers
 
-Add a guard line to skip processing on a file:
+Add `!rik` or `rik!` within a marker to skip that marker:
 
 ```
-!rik
+!rik: leave this task alone
+rik: leave this task alone rik!
+rik: process this task
 ```
 
-If this line exists anywhere in the file, rik skips it entirely even if markers are present. Use `!{alias}` when using a custom alias.
+Stoppers are local to the marker line or multi-line marker block that contains them.
+Other markers in the same file are still processed. Use `!{alias}` or `{alias}!`
+when using a custom alias.
 
 ### Multiple markers
 

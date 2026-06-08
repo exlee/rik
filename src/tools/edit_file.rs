@@ -109,7 +109,10 @@ impl Tool for EditFileTool<'_> {
         // Only task markers count as edit anchors; context markers do not.
         let marker_spans: Vec<(usize, usize)> = crate::markers::find_markers(&content, &self.alias)
             .iter()
-            .filter(|m| m.kind == MarkerKind::Task)
+            .filter(|marker| {
+                marker.kind == MarkerKind::Task
+                    && !crate::markers::is_stopped(&content, &self.alias, marker)
+            })
             .map(|m| (m.start_line, m.end_line))
             .collect();
 

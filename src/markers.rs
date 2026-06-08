@@ -59,6 +59,16 @@ pub struct FoundMarker {
     pub prefix: String,
 }
 
+/// Check whether a stopper appears within this marker's own line span.
+pub fn is_stopped(content: &str, alias: &str, marker: &FoundMarker) -> bool {
+    let stop_tags = [format!("!{alias}"), format!("{alias}!")];
+    content
+        .lines()
+        .skip(marker.start_line.saturating_sub(1))
+        .take(marker.end_line.saturating_sub(marker.start_line) + 1)
+        .any(|line| stop_tags.iter().any(|tag| line.contains(tag)))
+}
+
 /// Check if a raw query string is a slash-delimited context annotation.
 /// Matches `/.../` where the content starts and ends with `/`.
 fn is_context_query(query: &str) -> bool {
@@ -304,6 +314,33 @@ mod tests {
         let content = "rik:\nsome text\nrik:   \n";
         let markers = find_markers(content, "rik");
         assert!(markers.is_empty());
+    }
+
+    #[test]
+    fn test_stoppers_apply_only_to_their_marker() {
+        let content = "!rik: stopped\nrik: active\nrik: stopped rik!";
+        let markers = find_markers(content, "rik");
+
+        assert!(is_stopped(content, "rik", &markers[0]));
+        assert!(!is_stopped(content, "rik", &markers[1]));
+        assert!(is_stopped(content, "rik", &markers[2]));
+    }
+
+    #[test]
+    fn test_standalone_stopper_does_not_stop_other_markers() {
+        let content = "!rik\nrik: active";
+        let marker = &find_markers(content, "rik")[0];
+
+        assert!(!is_stopped(content, "rik", marker));
+    }
+
+    #[test]
+    fn test_stopper_inside_multiline_marker_stops_it() {
+        let content = "rik: [[\nwork\n!rik\n]]\nseparator\nrik: active";
+        let markers = find_markers(content, "rik");
+
+        assert!(is_stopped(content, "rik", &markers[0]));
+        assert!(!is_stopped(content, "rik", &markers[1]));
     }
 
     // -----------------------------------------------------------------------
