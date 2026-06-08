@@ -50,7 +50,7 @@ impl Tool for SendMessageTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let output = format!("[send_message] {}", args.message);
         println!("{}", output);
-        crate::keyboard::set_stop();
+        crate::keyboard::set_soft_stop();
         Ok(output)
     }
 }

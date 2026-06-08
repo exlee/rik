@@ -1,17 +1,46 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 
-static STOP: AtomicBool = AtomicBool::new(false);
+#[derive(Default)]
+pub struct StopStatus {
+    stop: bool,
+    soft: bool,
+}
+pub type StopStatusRef = Arc<RwLock<StopStatus>>;
+static STOP: OnceLock<Arc<RwLock<StopStatus>>> = OnceLock::new();
 
+fn stop() -> StopStatusRef {
+    STOP.get_or_init(|| {
+    let stop = StopStatus::default();
+    Arc::new(RwLock::new(stop))
+    }).clone()
+}
 pub fn set_stop() {
-    STOP.store(true, Ordering::SeqCst);
+    let stop = stop();
+    let mut stop_status = stop.write().expect("Can't acquire stop lock");
+    stop_status.stop = true;
+}
+pub fn set_soft_stop() {
+    let stop = stop();
+    let mut stop_status = stop.write().expect("Can't acquire stop lock");
+    stop_status.stop = true;
+    stop_status.soft = true;
 }
 
 pub fn should_stop() -> bool {
-    STOP.load(Ordering::SeqCst)
+    let stop = stop();
+    stop.read().map(|v| v.stop).unwrap_or_default()
+}
+
+pub fn is_soft_stop() -> bool {
+    let stop = stop();
+    stop.read().map(|v| v.stop && v.soft).unwrap_or_default()
 }
 
 pub fn clear_stop() {
-    STOP.store(false, Ordering::SeqCst);
+    let stop = stop();
+    let mut stop_status = stop.write().expect("Can't acquire stop lock");
+    stop_status.stop = false;
+    stop_status.soft = false;
 }
 
 /// Check if Space was pressed on stdin using non-canonical (raw) mode.

@@ -491,6 +491,9 @@ where
 
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
+            if crate::keyboard::is_soft_stop() {
+                _reverter.mark_success();
+            }
             crate::keyboard::clear_stop();
             return Ok(ScanOutcome::default());
         }
