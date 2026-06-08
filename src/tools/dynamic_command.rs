@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rig::completion::ToolDefinition;
@@ -17,6 +17,7 @@ enum CommandPart {
 pub struct DynamicCommandTool {
     name: String,
     description: String,
+    command: String,
     parts: Vec<CommandPart>,
     working_dir: std::path::PathBuf,
 }
@@ -53,6 +54,7 @@ impl DynamicCommandTool {
         Some(Self {
             name,
             description: description.unwrap_or_else(|| format!("Run `{command}`.")),
+            command: command.to_string(),
             parts,
             working_dir: working_dir.to_path_buf(),
         })
@@ -146,6 +148,11 @@ fn parse_part(word: String) -> CommandPart {
 #[error("{0}")]
 struct DynamicCommandError(String);
 
+impl DynamicCommandTool {
+    pub fn description(&self) -> String {
+        self.description.clone()
+   }
+}
 impl ToolDyn for DynamicCommandTool {
     fn name(&self) -> String {
         self.name.clone()
@@ -200,14 +207,19 @@ impl ToolDyn for DynamicCommandTool {
     }
 }
 
-pub fn find_dynamic_tools(content: &str, alias: &str, working_dir: &Path) -> Vec<Box<dyn ToolDyn>> {
+pub type DynamicToolsTuple = (HashMap<String,String>, Vec<Box<dyn ToolDyn>>);
+pub fn find_dynamic_tools(content: &str, alias: &str, working_dir: &Path) -> DynamicToolsTuple {
     let mut names = HashSet::new();
-    content
+    let tools: Vec<DynamicCommandTool> = content
         .lines()
         .filter_map(|line| DynamicCommandTool::parse(line, alias, working_dir))
-        .filter(|tool| names.insert(tool.name.clone()))
+        .filter(|tool| names.insert(tool.name.clone())).collect();
+    let toolhash: HashMap<String, String> = tools.clone().into_iter().map(|t| (t.name, t.command)).collect();
+    let tooldefs = tools.into_iter()
         .map(|tool| Box::new(tool) as Box<dyn ToolDyn>)
-        .collect()
+        .collect();
+
+    (toolhash, tooldefs)
 }
 
 #[cfg(test)]
@@ -234,7 +246,7 @@ mod tests {
 
     #[test]
     fn finds_only_matching_alias_and_deduplicates_names() {
-        let tools = find_dynamic_tools(
+        let (_, tools) = find_dynamic_tools(
             "rik +tool: cargo test\nother +tool: zig test x\nrik +tool: cargo check",
             "rik",
             Path::new("/tmp"),

@@ -228,9 +228,10 @@ where
         .tool(tools::ReadFileTool::default())
         .tool(tools::ListFilesTool::default())
         .default_max_turns(30);
+    let (_, tools) = tools::find_dynamic_tools(content, alias, &app_state.path);
     if question_allows_dynamic_tools(question_marker) {
         agent_builder =
-            agent_builder.tools(tools::find_dynamic_tools(content, alias, &app_state.path));
+            agent_builder.tools(tools);
     }
     let agent = agent_builder.build();
     let mut stream = agent.stream_prompt(&prompt).await;
@@ -459,6 +460,7 @@ where
     );
 
     let preamble = make_preamble(alias);
+    let (tool_hash, dynamic_tools) = tools::find_dynamic_tools(&content_before, alias, &app_state.path);
     let agent_builder = comp_client
         .agent(model_name)
         .preamble(&preamble)
@@ -471,11 +473,7 @@ where
         .tool(tools::SendMessageTool)
         .tool(tools::ListFilesTool::default())
         .tool(tools::WriteFileTool::default())
-        .tools(tools::find_dynamic_tools(
-            &content_before,
-            alias,
-            &app_state.path,
-        ))
+        .tools(dynamic_tools)
         .default_max_turns(30);
 
     let agent = agent_builder.build();
@@ -607,6 +605,17 @@ where
                         }
                     }
                     "send_message" => continue,
+                    dynamic if tool_hash.contains_key(dynamic) => {
+                        let cmd = tool_hash.get(dynamic).cloned().unwrap_or_default();
+                        let params = if let Some(obj) = tool_call.function.arguments.as_object() {
+                            obj.iter().map(|(k,v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")
+                        } else if let Some(list) = tool_call.function.arguments.as_array() {
+                            list.clone().into_iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(" ")
+                        } else {
+                            tool_call.function.arguments.to_string()
+                        };
+                        format!("{cmd} -- {params}")
+                    },
                     _ => tool_call.function.arguments.to_string(),
                 };
                 if output.tool_calls {
