@@ -33,8 +33,7 @@ impl Tool for SendMessageTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Display a message and trigger the keyboard stop."
-                .to_string(),
+            description: "Display a message and trigger the keyboard stop.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {

@@ -5,10 +5,19 @@ use anyhow::{Context, Result};
 
 use crate::config::Config;
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct QuestionId {
+    file_path: PathBuf,
+    start_line: usize,
+    end_line: usize,
+    query: String,
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub path: PathBuf,
     pub config: Config,
+    answered_questions: dashmap::DashSet<QuestionId>,
 }
 
 impl AppState {
@@ -19,7 +28,29 @@ impl AppState {
         if !path.is_dir() {
             anyhow::bail!("Watched path is not a directory: {}", path.display());
         }
-        Ok(Self { path, config })
+        Ok(Self {
+            path,
+            config,
+            answered_questions: dashmap::DashSet::new(),
+        })
+    }
+
+    pub fn question_was_answered(
+        &self,
+        file_path: &Path,
+        marker: &crate::markers::FoundMarker,
+    ) -> bool {
+        self.answered_questions
+            .contains(&QuestionId::new(file_path, marker))
+    }
+
+    pub fn remember_answered_question(
+        &self,
+        file_path: &Path,
+        marker: &crate::markers::FoundMarker,
+    ) {
+        self.answered_questions
+            .insert(QuestionId::new(file_path, marker));
     }
 
     pub fn resolve_path(&self, raw: &str) -> Result<PathBuf> {
@@ -58,6 +89,17 @@ impl AppState {
             resolved.push(component);
         }
         Ok(resolved)
+    }
+}
+
+impl QuestionId {
+    fn new(file_path: &Path, marker: &crate::markers::FoundMarker) -> Self {
+        Self {
+            file_path: file_path.to_path_buf(),
+            start_line: marker.start_line,
+            end_line: marker.end_line,
+            query: marker.query.clone(),
+        }
     }
 }
 

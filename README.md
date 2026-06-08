@@ -233,6 +233,16 @@ Use slash-delimited markers to provide extra context without content replacement
 rik: /see the type definition above for reference/
 ```
 
+### Question mode
+
+End a marker with `?` to ask Rik a read-only question:
+
+```
+rik: why is this function allocation-heavy?
+```
+
+Question markers are handled individually, in top-to-bottom order alongside normal markers. For a question marker, Rik uses a separate read-only prompt with only `read_file` and `list_files`, prints just the answer, and leaves the exact question line untouched. Rik remembers answered question locations in memory so watch mode does not answer the same line repeatedly; restarting Rik clears that memory.
+
 ### Watch mode
 
 Continuously monitor files and process markers as they appear:

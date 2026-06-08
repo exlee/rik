@@ -6425,6 +6425,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
+ "dashmap",
  "dirs",
  "futures",
  "glob",

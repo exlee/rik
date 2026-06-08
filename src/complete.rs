@@ -11,6 +11,44 @@ use crate::markers::MarkerKind;
 use crate::state::AppState;
 use crate::{cleanup, personality, raii, tools};
 
+#[derive(Default)]
+struct ScanOutcome {
+    completed_markers: usize,
+    answered_questions: usize,
+}
+
+impl ScanOutcome {
+    fn add(&mut self, other: Self) {
+        self.completed_markers += other.completed_markers;
+        self.answered_questions += other.answered_questions;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MarkerOutput {
+    verbose: bool,
+    tool_calls: bool,
+    personality: bool,
+}
+
+impl MarkerOutput {
+    fn for_marker(marker: &crate::markers::FoundMarker, verbose: bool, personality: bool) -> Self {
+        if is_question_marker(marker) {
+            Self {
+                verbose: false,
+                tool_calls: false,
+                personality: false,
+            }
+        } else {
+            Self {
+                verbose,
+                tool_calls: true,
+                personality,
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared processing logic parameterized over provider client types via a macro.
 // Each provider has its own concrete Client + CompletionModel types so we can't
@@ -32,7 +70,7 @@ macro_rules! define_provider_dispatch {
             pattern: &str,
             verbose: bool,
             personality: bool,
-        ) -> anyhow::Result<usize> {
+        ) -> anyhow::Result<ScanOutcome> {
             match cfg.provider {
                 $(
                     Provider::$variant => {
@@ -106,8 +144,8 @@ You are an in-place editor. A file contains '{alias}: <instruction>' markers tha
 must be replaced with real content. The file is a working document (code, prose, \
 config, etc.) and your edits must keep it coherent and correct.
 
-There may be MULTIPLE markers in the file. Process ALL of them in a single pass. \
-Do NOT stop after the first one.
+The prompt identifies exactly one marker to process. Work only on that marker; \
+other markers are handled separately.
 
 Tools:
 - read_file: read other files for context (types, imports, conventions).
@@ -129,45 +167,113 @@ Rules:
   A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.")
 }
 
-/// Remove ALL remaining marker lines from a file (both Task and Context).
-///
-/// Re-scans the current file content so line positions are accurate even after
-/// earlier edits shifted things. Removes single-line markers and the full span
-/// of multi-line markers (opening line through closing line, inclusive).
-///
-/// This guarantees that no marker remnants are left in the file after the
-/// agent finishes its work.
-fn remove_remaining_markers(file_path: &std::path::Path, alias: &str) -> anyhow::Result<usize> {
-    let content = std::fs::read_to_string(file_path)
-        .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
+fn is_question_marker(marker: &crate::markers::FoundMarker) -> bool {
+    marker.kind == MarkerKind::Task && marker.query.trim_end().ends_with('?')
+}
 
-    // Re-scan so positions reflect any shifts from prior edits.
-    let markers = crate::markers::find_markers(&content, alias);
-    if markers.is_empty() {
-        return Ok(0);
-    }
+fn make_question_preamble(alias: &str) -> String {
+    format!(
+        "You answer questions written in '{alias}:' file markers. This is a strictly read-only \
+         mode: you have no tools that modify files. Read files only when needed for context. \
+         Answer the questions directly and concisely. Do not describe your process, mention \
+         tools, add personality, or propose edits."
+    )
+}
 
-    // Build the set of 0-based line indices to remove.
-    let mut remove_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for m in &markers {
-        for line in (m.start_line - 1)..=(m.end_line - 1) {
-            // 0-based inclusive range
-            remove_lines.insert(line);
+async fn answer_questions<C>(
+    app_state: &AppState,
+    comp_client: &C,
+    model_name: &str,
+    alias: &str,
+    file_path: &std::path::Path,
+    content: &str,
+    question_marker: &crate::markers::FoundMarker,
+) -> anyhow::Result<bool>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+{
+    let prompt = format!(
+        "Target file: {}\nFile type: {}\n\nQUESTION at line {}: {}\n\
+         Surrounding context:\n{}\n\nAnswer the question directly.",
+        file_path.display(),
+        file_extension(file_path),
+        question_marker.start_line,
+        question_marker.query,
+        surrounding_lines(content, question_marker.start_line, 5),
+    );
+
+    let agent = comp_client
+        .agent(model_name)
+        .preamble(&make_question_preamble(alias))
+        .tool(tools::ReadFileTool::default())
+        .tool(tools::ListFilesTool::default())
+        .default_max_turns(30)
+        .build();
+    let mut stream = agent.stream_prompt(&prompt).await;
+    let mut answered = false;
+
+    while let Some(item) = stream.next().await {
+        if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
+            crate::keyboard::clear_stop();
+            return Ok(false);
+        }
+        match item {
+            Ok(MultiTurnStreamItem::FinalResponse(res)) => {
+                let answer = res.response();
+                if !answer.is_empty() {
+                    println!("{answer}");
+                }
+                answered = true;
+            }
+            Err(e) => {
+                eprintln!("Stream error: {e}");
+                break;
+            }
+            _ => {}
         }
     }
 
-    // Build the new content with marker lines removed.
+    if answered {
+        app_state.remember_answered_question(file_path, question_marker);
+    } else {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Remove one completed marker while leaving every other marker untouched.
+fn remove_marker(
+    file_path: &std::path::Path,
+    alias: &str,
+    completed: &crate::markers::FoundMarker,
+) -> anyhow::Result<bool> {
+    let content = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
+
+    let markers = crate::markers::find_markers(&content, alias);
+    let Some(marker) = markers.iter().find(|marker| {
+        marker.start_line == completed.start_line
+            && marker.end_line == completed.end_line
+            && marker.kind == completed.kind
+            && marker.query == completed.query
+    }) else {
+        return Ok(false);
+    };
+
     let lines: Vec<&str> = content.lines().collect();
     let had_trailing_newline = content.ends_with('\n');
     let kept: Vec<&str> = lines
         .iter()
         .enumerate()
-        .filter(|(idx, _)| !remove_lines.contains(idx))
+        .filter(|(idx, _)| {
+            let line = idx + 1;
+            line < marker.start_line || line > marker.end_line
+        })
         .map(|(_, line)| *line)
         .collect();
 
     let mut new_content = kept.join("\n");
-    // Preserve trailing newline if original had one.
     if had_trailing_newline && !new_content.ends_with('\n') {
         new_content.push('\n');
     }
@@ -175,10 +281,39 @@ fn remove_remaining_markers(file_path: &std::path::Path, alias: &str) -> anyhow:
     std::fs::write(file_path, &new_content)
         .with_context(|| format!("Failed to write cleaned file: {}", file_path.display()))?;
 
-    Ok(markers.len())
+    Ok(true)
+}
+
+fn remove_context_markers(file_path: &std::path::Path, alias: &str) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
+    let markers = crate::markers::find_markers(&content, alias);
+    let remove_lines: std::collections::HashSet<_> = markers
+        .iter()
+        .filter(|marker| marker.kind == MarkerKind::Context)
+        .flat_map(|marker| marker.start_line..=marker.end_line)
+        .collect();
+    if remove_lines.is_empty() {
+        return Ok(());
+    }
+
+    let had_trailing_newline = content.ends_with('\n');
+    let mut new_content = content
+        .lines()
+        .enumerate()
+        .filter(|(idx, _)| !remove_lines.contains(&(idx + 1)))
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if had_trailing_newline && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    std::fs::write(file_path, new_content)
+        .with_context(|| format!("Failed to write cleaned file: {}", file_path.display()))
 }
 
 async fn process_file_markers<C>(
+    app_state: &AppState,
     comp_client: &C,
     model_name: &str,
     alias: &str,
@@ -186,7 +321,7 @@ async fn process_file_markers<C>(
     file_path: &std::path::Path,
     verbose: bool,
     personality: bool,
-) -> anyhow::Result<usize>
+) -> anyhow::Result<ScanOutcome>
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
@@ -201,7 +336,7 @@ where
         .count()
         == 0
     {
-        return Ok(0);
+        return Ok(ScanOutcome::default());
     }
 
     let halt_tags = [format!("!{alias}"), format!("{alias}!")];
@@ -213,52 +348,65 @@ where
                 file_path.display(),
                 halt_tag
             );
-            return Ok(0);
+            return Ok(ScanOutcome::default());
         }
     }
 
-    // Separate task markers (agent must act) from context markers (supplementary info).
-    let task_markers: Vec<_> = all_markers
+    let Some(task_marker) = all_markers
         .iter()
-        .filter(|m| m.kind == MarkerKind::Task)
-        .collect();
+        .filter(|marker| marker.kind == MarkerKind::Task)
+        .find(|marker| {
+            !is_question_marker(marker) || !app_state.question_was_answered(file_path, marker)
+        })
+        .cloned()
+    else {
+        return Ok(ScanOutcome::default());
+    };
+    let output = MarkerOutput::for_marker(&task_marker, verbose, personality);
+
+    if is_question_marker(&task_marker) {
+        let answered = answer_questions(
+            app_state,
+            comp_client,
+            model_name,
+            alias,
+            file_path,
+            &content_before,
+            &task_marker,
+        )
+        .await?;
+        return Ok(ScanOutcome {
+            completed_markers: 0,
+            answered_questions: usize::from(answered),
+        });
+    }
+
     let context_markers: Vec<_> = all_markers
         .iter()
         .filter(|m| m.kind == MarkerKind::Context)
         .collect();
 
     println!(
-        "Found {} marker(s) in {} ({} task{}, {} context)",
-        all_markers.len(),
+        "Found marker in {} (1 task, {} context)",
         file_path.display(),
-        task_markers.len(),
-        if task_markers.len() != 1 { "s" } else { "" },
         context_markers.len(),
     );
 
-    for m in &task_markers {
-        println!("[{alias}]: Task: {} (L{})", m.query, m.start_line);
-    }
+    println!(
+        "[{alias}]: Task: {} (L{})",
+        task_marker.query, task_marker.start_line
+    );
     for m in &context_markers {
         println!("[{alias}]: Context: {} (L{})", m.query, m.start_line);
     }
 
-    // Build a single prompt with all markers.
     let file_display = file_path.display().to_string();
-    // Build blocks for task markers (things the agent must do).
-    let tasks_block = task_markers
-        .iter()
-        .map(|m| {
-            format!(
-                "TASK at line {}: {alias}: {}\n\
-                 Surrounding context:\n{}",
-                m.start_line,
-                m.query,
-                surrounding_lines(&content_before, m.start_line, 5),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n---\n");
+    let task_block = format!(
+        "TASK at line {}: {alias}: {}\nSurrounding context:\n{}",
+        task_marker.start_line,
+        task_marker.query,
+        surrounding_lines(&content_before, task_marker.start_line, 5),
+    );
 
     // Build blocks for context markers (supplementary background info).
     let context_section = if context_markers.is_empty() {
@@ -277,15 +425,13 @@ where
     let prompt = format!(
         "Target file: {file_display}\n\
          File type: {}\n\
-         Number of tasks to complete: {}\n\
          {}\n\
          {}\n\n\
-         Read the file and any other context you need, then replace ALL task markers \
-         with content that is coherent with the rest of the file according to each instruction.\n\
+         Read the file and any other context you need, then replace this task marker \
+         with content that is coherent with the rest of the file.\n\
          Do NOT edit or remove the context note lines yourself; they will be cleaned up automatically.",
         file_extension(file_path),
-        task_markers.len(),
-        tasks_block,
+        task_block,
         context_section,
     );
 
@@ -306,7 +452,7 @@ where
 
     let agent = agent_builder.build();
 
-    if personality {
+    if output.personality {
         personality::pre_work_personality(alias);
     }
 
@@ -319,7 +465,7 @@ where
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
             crate::keyboard::clear_stop();
-            return Ok(0);
+            return Ok(ScanOutcome::default());
         }
         if !matches!(
             &item,
@@ -332,7 +478,7 @@ where
         match item {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
                 reasoning,
-            ))) if verbose => {
+            ))) if output.verbose => {
                 if !is_reasoning {
                     is_reasoning = true;
                     print!("\n    \x1b[90m// thinking...\x1b[0m\n");
@@ -342,7 +488,7 @@ where
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. },
-            )) if verbose => {
+            )) if output.verbose => {
                 if !is_reasoning {
                     is_reasoning = true;
                     print!("\n    \x1b[90m// thinking...\x1b[0m\n");
@@ -351,9 +497,9 @@ where
                 std::io::stdout().flush().ok();
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)))
-                if verbose =>
+                if output.verbose =>
             {
-                if is_reasoning && verbose {
+                if is_reasoning && output.verbose {
                     is_reasoning = false;
                     print!("\n    \x1b[0m");
                 }
@@ -368,7 +514,7 @@ where
                 tool_call,
                 ..
             })) => {
-                if is_reasoning && verbose {
+                if is_reasoning && output.verbose {
                     is_reasoning = false;
                     print!("\n    \x1b[0m");
                 }
@@ -432,10 +578,12 @@ where
                     "send_message" => continue,
                     _ => tool_call.function.arguments.to_string(),
                 };
-                println!("[tool]: {} {}", tool_call.function.name, msg);
+                if output.tool_calls {
+                    println!("[tool]: {} {}", tool_call.function.name, msg);
+                }
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
-                if is_reasoning && verbose {
+                if is_reasoning && output.verbose {
                     print!("\n    \x1b[0m");
                 }
                 let summary = res.response();
@@ -453,9 +601,7 @@ where
         }
     }
 
-    // Remove ALL remaining markers from the file (both task and context).
-    // This guarantees cleanup even if the agent didn't replace every marker.
-    remove_remaining_markers(file_path, alias)?;
+    remove_marker(file_path, alias, &task_marker)?;
 
     // Show diff if the file changed.
     let content_after = std::fs::read_to_string(file_path)
@@ -475,11 +621,14 @@ where
         }
     }
     _reverter.mark_success();
-    if personality {
+    if output.personality {
         personality::post_work_personality(alias);
     }
 
-    Ok(all_markers.len())
+    Ok(ScanOutcome {
+        completed_markers: 1,
+        answered_questions: 0,
+    })
 }
 
 async fn process_scan_and_complete<C>(
@@ -491,7 +640,7 @@ async fn process_scan_and_complete<C>(
     pattern: &str,
     verbose: bool,
     personality: bool,
-) -> anyhow::Result<usize>
+) -> anyhow::Result<ScanOutcome>
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
@@ -501,21 +650,33 @@ where
         anyhow::bail!("No files matched pattern: {pattern}");
     }
 
-    let mut total = 0usize;
+    let mut outcome = ScanOutcome::default();
     for file_path in &files {
-        total += process_file_markers(
-            comp_client,
-            model_name,
-            alias,
-            diff_tool,
-            file_path,
-            verbose,
-            personality,
-        )
-        .await?;
+        let mut file_outcome = ScanOutcome::default();
+        loop {
+            let processed = process_file_markers(
+                app_state,
+                comp_client,
+                model_name,
+                alias,
+                diff_tool,
+                file_path,
+                verbose,
+                personality,
+            )
+            .await?;
+            if processed.completed_markers == 0 && processed.answered_questions == 0 {
+                break;
+            }
+            file_outcome.add(processed);
+        }
+        if file_outcome.completed_markers > 0 {
+            remove_context_markers(file_path, alias)?;
+        }
+        outcome.add(file_outcome);
     }
 
-    Ok(total)
+    Ok(outcome)
 }
 
 /// Single-pass completion: scan once, process all markers.
@@ -527,7 +688,7 @@ pub async fn cmd_complete(
 ) -> anyhow::Result<()> {
     let config = &app_state.config;
     let diff_tool = config.diff_tool.as_ref();
-    let count = scan_and_complete_dispatch(
+    let outcome = scan_and_complete_dispatch(
         app_state,
         &config.model,
         alias,
@@ -538,10 +699,10 @@ pub async fn cmd_complete(
     )
     .await?;
 
-    if count == 0 {
+    if outcome.completed_markers == 0 && outcome.answered_questions == 0 {
         println!("No '{alias}:' markers found.");
-    } else {
-        println!("Completed {count} marker(s).");
+    } else if outcome.completed_markers > 0 {
+        println!("Completed {} marker(s).", outcome.completed_markers);
     }
 
     Ok(())
@@ -571,6 +732,83 @@ mod tests {
         let path = path.to_string_lossy();
 
         assert_eq!(display_tool_path(&state, &path), path);
+        Ok(())
+    }
+
+    #[test]
+    fn question_markers_end_with_question_mark() {
+        let markers = crate::markers::find_markers(
+            "rik: why is this slow?   \nrik: make this faster\nrik: /context?/",
+            "rik",
+        );
+
+        let questions: Vec<_> = markers
+            .iter()
+            .filter(|marker| is_question_marker(marker))
+            .collect();
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].query, "why is this slow?");
+    }
+
+    #[test]
+    fn question_marker_output_silences_tools_verbose_and_personality() {
+        let question = crate::markers::find_markers("rik: why?", "rik")
+            .into_iter()
+            .next()
+            .unwrap();
+        let edit = crate::markers::find_markers("rik: do it", "rik")
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert_eq!(
+            MarkerOutput::for_marker(&question, true, true),
+            MarkerOutput {
+                verbose: false,
+                tool_calls: false,
+                personality: false,
+            }
+        );
+        assert_eq!(
+            MarkerOutput::for_marker(&edit, true, true),
+            MarkerOutput {
+                verbose: true,
+                tool_calls: true,
+                personality: true,
+            }
+        );
+    }
+
+    #[test]
+    fn answered_question_memory_filters_exact_marker_identity() {
+        let file = std::path::Path::new("/tmp/question-memory-test.rs");
+        let markers = crate::markers::find_markers("rik: why?\nrik: why?", "rik");
+        let dir = tempfile::tempdir().unwrap();
+        let state =
+            AppState::new(dir.path().to_path_buf(), crate::config::Config::default()).unwrap();
+
+        state.remember_answered_question(file, &markers[0]);
+
+        assert!(state.question_was_answered(file, &markers[0]));
+        assert!(!state.question_was_answered(file, &markers[1]));
+    }
+
+    #[test]
+    fn completed_marker_cleanup_leaves_question_and_later_markers() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        std::fs::write(
+            &file,
+            "rik: first task\nrik: why?\nrik: second task\ncontent\n",
+        )?;
+        let markers = crate::markers::find_markers(&std::fs::read_to_string(&file)?, "rik");
+
+        assert!(remove_marker(&file, "rik", &markers[0])?);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "rik: why?\nrik: second task\ncontent\n"
+        );
         Ok(())
     }
 }
