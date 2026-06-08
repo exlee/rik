@@ -242,7 +242,9 @@ where
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
                 let answer = res.response();
                 if !answer.is_empty() {
+                    println!("\n\n== ANSWER START ==\n");
                     println!("{answer}");
+                    println!("\n== ANSWER END ==");
                 }
                 answered = true;
             }
