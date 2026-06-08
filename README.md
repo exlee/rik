@@ -250,6 +250,18 @@ Questions can use dynamic tools defined in their file only when the question con
 rik: +tool what does the Go documentation say about context cancellation?
 ```
 
+Additionally, question mark can be put at the beginning or in Rik's callout:
+
+```
+rik?: Remind me how to use zls to format arrays in zig
+```
+
+Surprised?
+
+```
+rik: ??? Why this function returns only a bool
+```
+
 ### Watch mode
 
 Continuously monitor files and process markers as they appear:

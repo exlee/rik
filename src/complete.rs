@@ -168,7 +168,10 @@ Rules:
 }
 
 fn is_question_marker(marker: &crate::markers::FoundMarker) -> bool {
-    marker.kind == MarkerKind::Task && marker.query.trim_end().ends_with('?')
+    marker.kind == MarkerKind::Task
+        && (marker.query.trim_end().ends_with('?')
+            || marker.query.trim_start().starts_with('?')
+            || marker.prefix.contains("?"))
 }
 
 fn question_allows_dynamic_tools(marker: &crate::markers::FoundMarker) -> bool {

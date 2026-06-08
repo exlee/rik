@@ -56,6 +56,7 @@ pub struct FoundMarker {
     pub end_line: usize,
     pub kind: MarkerKind,
     pub query: String,
+    pub prefix: String,
 }
 
 /// Check if a raw query string is a slash-delimited context annotation.
@@ -87,164 +88,169 @@ fn context_inner(query: &str) -> String {
 /// For single-line markers `start_line == end_line`. For multi-line markers
 /// `end_line` is the closing delimiter line.
 pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
-    let prefix = format!("{alias}:");
+    let prefixes = [format!("{alias}:"), format!("{alias}?:")];
     let lines: Vec<&str> = content.lines().collect();
     let mut markers = Vec::new();
     let mut i = 0;
 
     while i < lines.len() {
         let line = lines[i];
-        if let Some(pos) = line.find(&prefix) {
-            let after = line[pos + prefix.len()..].trim();
+        for prefix in prefixes.iter() {
+            if let Some(pos) = line.find(prefix) {
+                let after = line[pos + prefix.len()..].trim();
 
-            if let Some((open, close)) = match_opening_delimiter(after) {
-                // Multi-line marker: collect lines until closing delimiter.
-                // For single-char delimiters we track nesting depth so that
-                // balanced pairs inside the body don't prematurely close the block.
-                let start_line = i + 1; // 1-based
-                let is_single_char = open.len() == 1;
-                let open_ch = if is_single_char {
-                    Some(open.as_bytes()[0])
-                } else {
-                    None
-                };
-                let close_ch = if is_single_char {
-                    Some(close.as_bytes()[0])
-                } else {
-                    None
-                };
-
-                let mut inner_lines: Vec<String> = Vec::new();
-                let mut found_close = false;
-                let mut depth: usize = 1; // started at depth 1 from the opening line
-
-                let mut j = i + 1;
-                while j < lines.len() {
-                    let content_line = lines[j];
-
-                    // Count how many times the exact close delimiter appears on this line.
-                    // For multi-char delimiters ("[[", "[[[") we do an exact line match.
-                    // For single-char delimiters we scan the line character-by-character.
-                    let line_closes = if is_single_char {
-                        // Scan for open/close chars; skip quoted strings roughly.
-                        let mut local_depth_delta: isize = 0;
-                        let mut in_single_quote = false;
-                        let mut in_double_quote = false;
-                        for b in content_line.bytes() {
-                            match b {
-                                b'\\' if in_single_quote || in_double_quote => {
-                                    // skip next char inside quotes
-                                    continue;
-                                }
-                                b'\'' if !in_double_quote => {
-                                    in_single_quote = !in_single_quote;
-                                    continue;
-                                }
-                                b'"' if !in_single_quote => {
-                                    in_double_quote = !in_double_quote;
-                                    continue;
-                                }
-                                _ => {}
-                            }
-                            if !in_single_quote && !in_double_quote {
-                                if Some(b) == open_ch {
-                                    local_depth_delta += 1;
-                                } else if Some(b) == close_ch {
-                                    local_depth_delta -= 1;
-                                }
-                            }
-                        }
-                        local_depth_delta
+                if let Some((open, close)) = match_opening_delimiter(after) {
+                    // Multi-line marker: collect lines until closing delimiter.
+                    // For single-char delimiters we track nesting depth so that
+                    // balanced pairs inside the body don't prematurely close the block.
+                    let start_line = i + 1; // 1-based
+                    let is_single_char = open.len() == 1;
+                    let open_ch = if is_single_char {
+                        Some(open.as_bytes()[0])
                     } else {
-                        // Multi-char delimiter: check if the trimmed line is exactly the close token.
-                        // We need to count occurrences for cases like "]] ]]" but keep it simple:
-                        // atomic match — trimmed line equals close string counts as 1 close.
-                        if content_line.trim() == close {
-                            -1
-                        } else if content_line.trim() == open {
-                            1
-                        } else {
-                            0
-                        }
+                        None
+                    };
+                    let close_ch = if is_single_char {
+                        Some(close.as_bytes()[0])
+                    } else {
+                        None
                     };
 
-                    if is_single_char {
-                        depth = if line_closes >= 0 {
-                            depth.saturating_add(line_closes as usize)
+                    let mut inner_lines: Vec<String> = Vec::new();
+                    let mut found_close = false;
+                    let mut depth: usize = 1; // started at depth 1 from the opening line
+
+                    let mut j = i + 1;
+                    while j < lines.len() {
+                        let content_line = lines[j];
+
+                        // Count how many times the exact close delimiter appears on this line.
+                        // For multi-char delimiters ("[[", "[[[") we do an exact line match.
+                        // For single-char delimiters we scan the line character-by-character.
+                        let line_closes = if is_single_char {
+                            // Scan for open/close chars; skip quoted strings roughly.
+                            let mut local_depth_delta: isize = 0;
+                            let mut in_single_quote = false;
+                            let mut in_double_quote = false;
+                            for b in content_line.bytes() {
+                                match b {
+                                    b'\\' if in_single_quote || in_double_quote => {
+                                        // skip next char inside quotes
+                                        continue;
+                                    }
+                                    b'\'' if !in_double_quote => {
+                                        in_single_quote = !in_single_quote;
+                                        continue;
+                                    }
+                                    b'"' if !in_single_quote => {
+                                        in_double_quote = !in_double_quote;
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                                if !in_single_quote && !in_double_quote {
+                                    if Some(b) == open_ch {
+                                        local_depth_delta += 1;
+                                    } else if Some(b) == close_ch {
+                                        local_depth_delta -= 1;
+                                    }
+                                }
+                            }
+                            local_depth_delta
                         } else {
-                            depth.saturating_sub((-line_closes) as usize)
+                            // Multi-char delimiter: check if the trimmed line is exactly the close token.
+                            // We need to count occurrences for cases like "]] ]]" but keep it simple:
+                            // atomic match — trimmed line equals close string counts as 1 close.
+                            if content_line.trim() == close {
+                                -1
+                            } else if content_line.trim() == open {
+                                1
+                            } else {
+                                0
+                            }
                         };
-                        if depth == 0 {
-                            found_close = true;
-                            break;
-                        }
-                        // Don't add the line if it was purely the closing bracket
-                        // (depth went to 0). Otherwise include it.
-                        if depth > 0 {
+
+                        if is_single_char {
+                            depth = if line_closes >= 0 {
+                                depth.saturating_add(line_closes as usize)
+                            } else {
+                                depth.saturating_sub((-line_closes) as usize)
+                            };
+                            if depth == 0 {
+                                found_close = true;
+                                break;
+                            }
+                            // Don't add the line if it was purely the closing bracket
+                            // (depth went to 0). Otherwise include it.
+                            if depth > 0 {
+                                inner_lines.push(content_line.trim_start().to_string());
+                            }
+                        } else if line_closes < 0 {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                found_close = true;
+                                break;
+                            }
+                        } else if line_closes > 0 {
+                            depth = depth.saturating_add(line_closes as usize);
+                            inner_lines.push(content_line.trim_start().to_string());
+                        } else {
                             inner_lines.push(content_line.trim_start().to_string());
                         }
-                    } else if line_closes < 0 {
-                        depth = depth.saturating_sub(1);
-                        if depth == 0 {
-                            found_close = true;
-                            break;
-                        }
-                    } else if line_closes > 0 {
-                        depth = depth.saturating_add(line_closes as usize);
-                        inner_lines.push(content_line.trim_start().to_string());
-                    } else {
-                        inner_lines.push(content_line.trim_start().to_string());
+                        j += 1;
                     }
-                    j += 1;
-                }
 
-                if found_close && !inner_lines.is_empty() {
-                    let end_line = j + 1; // 1-based, closing delimiter line
-                    markers.push(FoundMarker {
-                        start_line,
-                        end_line,
-                        kind: MarkerKind::Task,
-                        query: inner_lines.join("\n"),
-                    });
-                    i = j + 1; // skip past closing line
-                    continue;
-                } else {
-                    // Mismatched/unclosed delimiter -- treat opening line as single-line marker.
+                    if found_close && !inner_lines.is_empty() {
+                        let end_line = j + 1; // 1-based, closing delimiter line
+                        markers.push(FoundMarker {
+                            start_line,
+                            end_line,
+                            kind: MarkerKind::Task,
+                            query: inner_lines.join("\n"),
+                            prefix: prefix.clone(),
+                        });
+                        i = j + 1; // skip past closing line
+                        continue;
+                    } else {
+                        // Mismatched/unclosed delimiter -- treat opening line as single-line marker.
+                        let kind = if is_context_query(after) {
+                            MarkerKind::Context
+                        } else {
+                            MarkerKind::Task
+                        };
+                        markers.push(FoundMarker {
+                            start_line,
+                            end_line: start_line,
+                            kind,
+                            query: if kind == MarkerKind::Context {
+                                context_inner(after)
+                            } else {
+                                after.to_string()
+                            },
+                            prefix: prefix.clone(),
+                        });
+                        i += 1;
+                        continue;
+                    }
+                } else if !after.is_empty() {
+                    // Single-line marker — classify as Context or Task.
                     let kind = if is_context_query(after) {
                         MarkerKind::Context
                     } else {
                         MarkerKind::Task
                     };
                     markers.push(FoundMarker {
-                        start_line,
-                        end_line: start_line,
+                        start_line: i + 1,
+                        end_line: i + 1,
                         kind,
                         query: if kind == MarkerKind::Context {
                             context_inner(after)
                         } else {
                             after.to_string()
                         },
+                        prefix: prefix.clone(),
                     });
-                    i += 1;
-                    continue;
                 }
-            } else if !after.is_empty() {
-                // Single-line marker — classify as Context or Task.
-                let kind = if is_context_query(after) {
-                    MarkerKind::Context
-                } else {
-                    MarkerKind::Task
-                };
-                markers.push(FoundMarker {
-                    start_line: i + 1,
-                    end_line: i + 1,
-                    kind,
-                    query: if kind == MarkerKind::Context {
-                        context_inner(after)
-                    } else {
-                        after.to_string()
-                    },
-                });
             }
         }
         i += 1;
@@ -264,6 +270,7 @@ mod tests {
             end_line: end,
             kind,
             query: query.to_string(),
+            prefix: format!(""),
         }
     }
 
