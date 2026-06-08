@@ -243,6 +243,13 @@ rik: why is this function allocation-heavy?
 
 Question markers are handled individually, in top-to-bottom order alongside normal markers. For a question marker, Rik uses a separate read-only prompt with only `read_file` and `list_files`, prints just the answer, and leaves the exact question line untouched. Rik remembers answered question locations in memory so watch mode does not answer the same line repeatedly; restarting Rik clears that memory.
 
+Questions can use dynamic tools defined in their file only when the question contains
+`+tool` or `+tools`:
+
+```text
+rik: +tool what does the Go documentation say about context cancellation?
+```
+
 ### Watch mode
 
 Continuously monitor files and process markers as they appear:
@@ -283,6 +290,26 @@ rik gives the agent three tools during processing:
 | `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
 
 All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 20 turns before producing final edits.
+
+### Dynamic tools
+
+Define command tools directly in a file:
+
+```text
+rik +tool (run after editing): zig test src/main.zig
+rik +tool: cargo test
+rik +tool (read Go documentation): godoc <QUERY>
+rik +tool (read files with cat): cat <...>
+```
+
+The command executable becomes the tool name. Fixed arguments are passed unchanged,
+`<NAME>` creates a required lowercase string parameter, and `<...>` creates a
+required `args` string array. Commands run directly from rik's working directory,
+without a shell.
+
+Dynamic tools are available only while processing the file that defines them.
+Normal edit tasks can use them automatically. Questions must explicitly opt in with
+`+tool` or `+tools`.
 
 ## Guardrails
 

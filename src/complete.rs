@@ -171,6 +171,22 @@ fn is_question_marker(marker: &crate::markers::FoundMarker) -> bool {
     marker.kind == MarkerKind::Task && marker.query.trim_end().ends_with('?')
 }
 
+fn question_allows_dynamic_tools(marker: &crate::markers::FoundMarker) -> bool {
+    marker.query.split_whitespace().any(|word| {
+        let word = word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '+');
+        word == "+tool" || word == "+tools"
+    })
+}
+
+fn question_text(marker: &crate::markers::FoundMarker) -> String {
+    marker
+        .query
+        .split_whitespace()
+        .filter(|word| *word != "+tool" && *word != "+tools")
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn make_question_preamble(alias: &str) -> String {
     format!(
         "You answer questions written in '{alias}:' file markers. This is a strictly read-only \
@@ -199,17 +215,21 @@ where
         file_path.display(),
         file_extension(file_path),
         question_marker.start_line,
-        question_marker.query,
+        question_text(question_marker),
         surrounding_lines(content, question_marker.start_line, 5),
     );
 
-    let agent = comp_client
+    let mut agent_builder = comp_client
         .agent(model_name)
         .preamble(&make_question_preamble(alias))
         .tool(tools::ReadFileTool::default())
         .tool(tools::ListFilesTool::default())
-        .default_max_turns(30)
-        .build();
+        .default_max_turns(30);
+    if question_allows_dynamic_tools(question_marker) {
+        agent_builder =
+            agent_builder.tools(tools::find_dynamic_tools(content, alias, &app_state.path));
+    }
+    let agent = agent_builder.build();
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut answered = false;
 
@@ -448,6 +468,11 @@ where
         .tool(tools::SendMessageTool)
         .tool(tools::ListFilesTool::default())
         .tool(tools::WriteFileTool::default())
+        .tools(tools::find_dynamic_tools(
+            &content_before,
+            alias,
+            &app_state.path,
+        ))
         .default_max_turns(30);
 
     let agent = agent_builder.build();
@@ -749,6 +774,18 @@ mod tests {
 
         assert_eq!(questions.len(), 1);
         assert_eq!(questions[0].query, "why is this slow?");
+    }
+
+    #[test]
+    fn questions_require_explicit_dynamic_tool_authorization() {
+        let markers =
+            crate::markers::find_markers("rik: why?\nrik: +tool why?\nrik: why +tools ?", "rik");
+
+        assert!(!question_allows_dynamic_tools(&markers[0]));
+        assert!(question_allows_dynamic_tools(&markers[1]));
+        assert!(question_allows_dynamic_tools(&markers[2]));
+        assert_eq!(question_text(&markers[1]), "why?");
+        assert_eq!(question_text(&markers[2]), "why ?");
     }
 
     #[test]
