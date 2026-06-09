@@ -133,7 +133,6 @@ fn format_ranges(
     path: &Path,
     args: &ReadFileArgs,
     lines: &[&str],
-    requested: (usize, usize),
     ranges: &[(usize, usize)],
 ) -> String {
     let mut header = format!("[read_file] path={}", path.display());
@@ -142,11 +141,6 @@ fn format_ranges(
     }
     if let Some(limit) = args.limit {
         write!(header, " limit={limit}").ok();
-    }
-
-    if ranges == [requested] {
-        let (start, end) = ranges[0];
-        return format!("{header}\n{}", lines[start..end].join("\n"));
     }
 
     let chunks = ranges
@@ -184,7 +178,7 @@ impl Tool for ReadFileTool<'_> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path of the file to read"
+                        "description": "Absolute path of the file to read"
                     },
                     "offset": {
                         "type": "integer",
@@ -205,7 +199,6 @@ impl Tool for ReadFileTool<'_> {
             .app_state
             .resolve_path(&args.path)
             .map_err(|e| ReadFileError(e.to_string()))?;
-
         if !path.exists() {
             return Err(ReadFileError(format!("File not found: {}", path.display())));
         }
@@ -245,7 +238,7 @@ impl Tool for ReadFileTool<'_> {
             return Err(ReadFileError("Context known".to_string()));
         }
 
-        Ok(format_ranges(&path, &args, &lines, (start, end), &unread))
+        Ok(format_ranges(&path, &args, &lines, &unread))
     }
 }
 
@@ -297,7 +290,7 @@ mod tests {
         assert_eq!(
             result,
             format!(
-                "[read_file] path={}\nline1\nline2\nline3",
+                "[read_file] path={}\n[lines 1-3]\nline1\nline2\nline3",
                 file_path.display()
             )
         );
@@ -323,7 +316,7 @@ mod tests {
             .await?;
 
         assert!(
-            result.ends_with("line2\nline3"),
+            result.ends_with("[lines 2-3]\nline2\nline3"),
             "Expected result to end with 'line2\nline3', got: {result}"
         );
         cleanup_rel(&rel);

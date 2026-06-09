@@ -65,7 +65,7 @@ impl Tool for WriteFileTool<'_> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path of the new file to create"
+                        "description": "Absolute path of the new file to create"
                     },
                     "content": {
                         "type": "string",
@@ -82,7 +82,6 @@ impl Tool for WriteFileTool<'_> {
             .app_state
             .resolve_path(&args.path)
             .map_err(|e| WriteFileError(e.to_string()))?;
-
         if path.exists() {
             return Err(WriteFileError(format!(
                 "File already exists: {}",

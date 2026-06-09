@@ -2,7 +2,9 @@ use anyhow::Context;
 use futures::StreamExt;
 use rig::agent::MultiTurnStreamItem;
 use rig::client::CompletionClient;
-use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+use rig::completion::message::ToolResultContent;
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
+use std::collections::HashMap;
 use std::io::Write;
 
 use crate::config::{ModelConfig, Provider};
@@ -128,9 +130,44 @@ fn file_extension(path: &std::path::Path) -> &str {
 
 fn display_tool_path(app_state: &AppState, path: &str) -> String {
     match app_state.resolve_path(path) {
-        Ok(_) => path.to_string(),
+        Ok(path) => path
+            .strip_prefix(&app_state.path)
+            .map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    ".".to_string()
+                } else {
+                    relative.display().to_string()
+                }
+            })
+            .unwrap_or_else(|_| format!("<denied: {}>", path.display())),
         Err(_) => format!("<denied: {path}>"),
     }
+}
+
+fn display_read_file_call(
+    app_state: &AppState,
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    let path = args
+        .get("path")
+        .and_then(|value| value.as_str())
+        .map_or_else(
+            || "???".to_string(),
+            |path| display_tool_path(app_state, path),
+        );
+    let offset = args
+        .get("offset")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1);
+    let lines = match args.get("limit").and_then(|value| value.as_u64()) {
+        Some(limit) => format!(
+            "{offset}-{}",
+            offset.saturating_add(limit).saturating_sub(1)
+        ),
+        None if offset == 1 => "all".to_string(),
+        None => format!("{offset}-"),
+    };
+    format!("{path} lines={lines}")
 }
 
 /// Extract a window of lines around `center_line` (1-based).
@@ -164,6 +201,8 @@ Tools:
 {tool_inject}
 
 Rules:
+- Always use absolute paths when calling file tools. Relative paths are only \
+  used in Rik's human-facing console output.
 - Study the surrounding lines BEFORE editing. Your replacement must fit the \
   existing style, indentation, language, and intent of the file.
 - If the file is code, respect existing imports, types, and variable names. \
@@ -512,6 +551,7 @@ where
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut is_reasoning = false;
     let mut last_text = false;
+    let mut pending_edit_diffs = HashMap::new();
 
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
@@ -566,7 +606,7 @@ where
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
-                ..
+                internal_call_id,
             })) => {
                 if is_reasoning && output.verbose {
                     is_reasoning = false;
@@ -577,7 +617,10 @@ where
                         if let Some(obj) = tool_call.function.arguments.as_object() {
                             let mut parts = Vec::new();
                             if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                                parts.push(format!("path={}", path));
+                                parts.push(format!(
+                                    "path={}",
+                                    display_tool_path(crate::state::get(), path)
+                                ));
                             }
                             if let Some(glob) = obj.get("glob").and_then(|v| v.as_str()) {
                                 parts.push(format!("glob={}", glob));
@@ -589,31 +632,36 @@ where
                     }
                     "read_file" => {
                         if let Some(obj) = tool_call.function.arguments.as_object() {
-                            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                                display_tool_path(crate::state::get(), path)
-                            } else {
-                                tool_call.function.arguments.to_string()
-                            }
+                            display_read_file_call(crate::state::get(), obj)
                         } else {
                             tool_call.function.arguments.to_string()
                         }
                     }
                     "edit_file" => {
                         if let Some(obj) = tool_call.function.arguments.as_object() {
-                            let old_len = obj
-                                .get("old_text")
-                                .and_then(|v| v.as_str())
-                                .map_or(0, |s| s.len());
-                            let new_len = obj
-                                .get("new_text")
-                                .and_then(|v| v.as_str())
-                                .map_or(0, |s| s.len());
-                            format!(
-                                "{} input_len={} output_len={}",
-                                file_path.display(),
-                                old_len,
-                                new_len
-                            )
+                            let old_text =
+                                obj.get("old_text").and_then(|v| v.as_str()).unwrap_or("");
+                            let new_text =
+                                obj.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
+                            let path = display_tool_path(
+                                crate::state::get(),
+                                file_path.to_string_lossy().as_ref(),
+                            );
+                            let label = file_path
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("file")
+                                .to_string();
+                            pending_edit_diffs.insert(
+                                internal_call_id,
+                                (
+                                    path.clone(),
+                                    label,
+                                    old_text.to_string(),
+                                    new_text.to_string(),
+                                ),
+                            );
+                            path
                         } else {
                             tool_call.function.arguments.to_string()
                         }
@@ -656,6 +704,32 @@ where
                 };
                 if output.tool_calls {
                     println!("[tool]: {} {}", tool_call.function.name, msg);
+                }
+            }
+            Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                tool_result,
+                internal_call_id,
+            })) => {
+                let succeeded = tool_result.content.into_iter().any(|content| {
+                    matches!(
+                        content,
+                        ToolResultContent::Text(text)
+                            if text.text.starts_with("[edit_file]")
+                    )
+                });
+                if succeeded
+                    && output.tool_calls
+                    && let Some((path, label, old_text, new_text)) =
+                        pending_edit_diffs.remove(&internal_call_id)
+                    && let Some(cmd) = resolve_diff_tool(diff_tool)
+                {
+                    println!("--- diff ({path}) ---");
+                    let diff_output = run_diff(&cmd, &label, &old_text, &new_text);
+                    if !diff_output.is_empty() {
+                        println!("{diff_output}");
+                    }
+                } else {
+                    pending_edit_diffs.remove(&internal_call_id);
                 }
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
@@ -793,13 +867,30 @@ mod tests {
     }
 
     #[test]
-    fn display_tool_path_allows_absolute_paths_inside_watched_directory() -> anyhow::Result<()> {
+    fn display_tool_path_makes_paths_inside_watched_directory_relative() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let state = AppState::new(dir.path().to_path_buf(), crate::config::Config::default())?;
         let path = state.path.join("inside.txt");
         let path = path.to_string_lossy();
 
-        assert_eq!(display_tool_path(&state, &path), path);
+        assert_eq!(display_tool_path(&state, &path), "inside.txt");
+        Ok(())
+    }
+
+    #[test]
+    fn display_read_file_call_includes_requested_lines() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let state = AppState::new(dir.path().to_path_buf(), crate::config::Config::default())?;
+        let args = serde_json::json!({
+            "path": state.path.join("src/main.rs"),
+            "offset": 20,
+            "limit": 11,
+        });
+
+        assert_eq!(
+            display_read_file_call(&state, args.as_object().unwrap()),
+            "src/main.rs lines=20-30"
+        );
         Ok(())
     }
 

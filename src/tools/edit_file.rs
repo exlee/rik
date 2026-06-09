@@ -99,12 +99,8 @@ impl Tool for EditFileTool<'_> {
             .app_state
             .resolve_path(&self.target_path)
             .map_err(|e| EditFileError(e.to_string()))?;
-
         if !path.exists() {
-            return Err(EditFileError(format!(
-                "File not found: {}",
-                self.target_path
-            )));
+            return Err(EditFileError(format!("File not found: {}", path.display())));
         }
 
         let content = std::fs::read_to_string(&path)?;
@@ -126,7 +122,7 @@ impl Tool for EditFileTool<'_> {
         match (first, last) {
             (None, _) => Err(EditFileError(format!(
                 "old_text not found in file: {}",
-                self.target_path
+                path.display()
             ))),
             (Some(a), Some(b)) if a != b => Err(EditFileError(format!(
                 "old_text matches {} locations in file -- must be unique",
@@ -162,11 +158,9 @@ impl Tool for EditFileTool<'_> {
                 self.read_history.clear();
 
                 Ok(format!(
-                    "[edit_file] path={} input_len={} output_len={}\nEdited {}",
-                    self.target_path,
-                    args.old_text.len(),
-                    args.new_text.len(),
-                    self.target_path
+                    "[edit_file] path={}\nEdited {}",
+                    path.display(),
+                    path.display()
                 ))
             }
         }
@@ -490,21 +484,10 @@ mod tests {
         );
         assert!(
             result.contains(file_path.display().to_string().as_str()),
-            "Output must contain the file path, got: {}",
+            "Output must contain the absolute file path, got: {}",
             result
         );
-        assert!(
-            result.contains(&format!("input_len={}", old_text.len())),
-            "Output must contain 'input_len={} ', got: {}",
-            old_text.len(),
-            result
-        );
-        assert!(
-            result.contains(&format!("output_len={}", new_text.len())),
-            "Output must contain 'output_len={} ', got: {}",
-            new_text.len(),
-            result
-        );
+        assert!(result.contains("Edited"));
         Ok(())
     }
 

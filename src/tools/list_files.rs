@@ -56,7 +56,7 @@ impl Tool for ListFilesTool<'_> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory to list from (default: watched directory)"
+                        "description": "Absolute directory path to list from (default: watched directory)"
                     },
                     "glob": {
                         "type": "string",
@@ -73,7 +73,6 @@ impl Tool for ListFilesTool<'_> {
             .app_state
             .resolve_path(dir_arg)
             .map_err(|e| ListFilesError(e.to_string()))?;
-
         if !root.exists() {
             return Err(ListFilesError(format!("Directory not found: {dir_arg}")));
         }
@@ -107,7 +106,7 @@ impl Tool for ListFilesTool<'_> {
             return Ok("No files found.".to_string());
         }
 
-        let mut header = format!("[list_files] path={dir_arg}");
+        let mut header = format!("[list_files] path={}", root.display());
         if let Some(ref glob_pattern) = args.glob {
             write!(header, " glob={glob_pattern}").ok();
         }
