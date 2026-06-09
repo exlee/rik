@@ -666,7 +666,9 @@ where
             }
             Err(e) => {
                 eprintln!("Stream error: {e}");
-                break;
+
+                // Revert on error
+                return Ok(ScanOutcome::default());
             }
             _ => {}
         }

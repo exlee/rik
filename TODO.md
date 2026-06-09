@@ -30,6 +30,14 @@
   Run it after edits and print its status and output. Do not feed the result
   back to the model, retry automatically, or widen the editing scope.
 
+## Ideas
+
+- Print out which lines `read_file` is reading - otherwise it looks like it's reading same file over and over
+- `read_file` / list_files should show path relatie to watched dir (shorter output)
+- `edit_file` could maybe show diff or at least lines  edited, otherwise output is useless
+- (maybe) `read_file` shouldn't allow rik to bloat context especially in consequent reads
+- Change `Stopped` -> `User cancel` and consider changing `space` to `esc` instead
+
 ## Out Of Scope
 
 - Comments-only marker recognition. Rik is intentionally format-agnostic and
