@@ -170,6 +170,23 @@ fn display_read_file_call(
     format!("{path} lines={lines}")
 }
 
+fn tool_result_text(tool_result: &rig::completion::message::ToolResult) -> String {
+    tool_result
+        .content
+        .clone()
+        .into_iter()
+        .filter_map(|content| match content {
+            ToolResultContent::Text(text) => Some(text.text),
+            ToolResultContent::Image(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn display_tool_error(result: &str) -> &str {
+    result.strip_prefix("ToolCallError: ").unwrap_or(result)
+}
+
 /// Extract a window of lines around `center_line` (1-based).
 /// Returns the lines with line numbers prefixed.
 fn surrounding_lines(content: &str, center_line: usize, radius: usize) -> String {
@@ -710,26 +727,23 @@ where
                 tool_result,
                 internal_call_id,
             })) => {
-                let succeeded = tool_result.content.into_iter().any(|content| {
-                    matches!(
-                        content,
-                        ToolResultContent::Text(text)
-                            if text.text.starts_with("[edit_file]")
-                    )
-                });
-                if succeeded
-                    && output.tool_calls
-                    && let Some((path, label, old_text, new_text)) =
-                        pending_edit_diffs.remove(&internal_call_id)
-                    && let Some(cmd) = resolve_diff_tool(diff_tool)
+                if let Some((path, label, old_text, new_text)) =
+                    pending_edit_diffs.remove(&internal_call_id)
                 {
-                    println!("--- diff ({path}) ---");
-                    let diff_output = run_diff(&cmd, &label, &old_text, &new_text);
-                    if !diff_output.is_empty() {
-                        println!("{diff_output}");
+                    let result = tool_result_text(&tool_result);
+                    if result.starts_with("[edit_file]") {
+                        if output.tool_calls
+                            && let Some(cmd) = resolve_diff_tool(diff_tool)
+                        {
+                            println!("--- diff ({path}) ---");
+                            let diff_output = run_diff(&cmd, &label, &old_text, &new_text);
+                            if !diff_output.is_empty() {
+                                println!("{diff_output}");
+                            }
+                        }
+                    } else if output.tool_calls {
+                        println!("[tool]: edit_file error: {}", display_tool_error(&result));
                     }
-                } else {
-                    pending_edit_diffs.remove(&internal_call_id);
                 }
             }
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
@@ -892,6 +906,15 @@ mod tests {
             "src/main.rs lines=20-30"
         );
         Ok(())
+    }
+
+    #[test]
+    fn display_tool_error_removes_rig_prefix() {
+        assert_eq!(
+            display_tool_error("ToolCallError: old_text not found"),
+            "old_text not found"
+        );
+        assert_eq!(display_tool_error("plain error"), "plain error");
     }
 
     #[test]
