@@ -310,8 +310,8 @@ rik gives the agent four file tools during processing:
 
 | Tool | Purpose |
 |---|---|
-| `read_file` | Read other files for context (types, imports, conventions). Supports offset/limit. |
-| `edit_file` | Replace exact text in the target file. Requires unique match. |
+| `read_file` | Read other files for context (types, imports, conventions). Supports offset/limit and omits lines already returned during the current task. |
+| `edit_file` | Replace exact text in the target file. Requires unique match and resets `read_file` history after a successful edit. |
 | `write_file` | Create new files (refuses to overwrite existing ones). |
 | `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
 

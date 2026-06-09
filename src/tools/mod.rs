@@ -8,6 +8,6 @@ pub mod write_file;
 pub use dynamic_command::find_dynamic_tools;
 pub use edit_file::EditFileTool;
 pub use list_files::ListFilesTool;
-pub use read_file::ReadFileTool;
+pub use read_file::{ReadFileHistory, ReadFileTool};
 pub use send_message::SendMessageTool;
 pub use write_file::WriteFileTool;

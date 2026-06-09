@@ -481,14 +481,19 @@ where
     );
 
     let preamble = make_preamble(alias, &tool_inject);
+    let read_history = std::sync::Arc::new(tools::ReadFileHistory::default());
     let agent_builder = comp_client
         .agent(model_name)
         .preamble(&preamble)
-        .tool(tools::ReadFileTool::default())
+        .tool(tools::ReadFileTool::with_history(
+            crate::state::get(),
+            read_history.clone(),
+        ))
         .tool(tools::EditFileTool {
             app_state: crate::state::get(),
             target_path: file_display,
             alias: alias.to_string(),
+            read_history,
         })
         .tool(tools::SendMessageTool)
         .tool(tools::ListFilesTool::default())

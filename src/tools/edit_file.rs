@@ -2,8 +2,10 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::markers::MarkerKind;
+use crate::tools::ReadFileHistory;
 
 // ---------------------------------------------------------------------------
 // EditFile tool
@@ -50,6 +52,8 @@ pub struct EditFileTool<'a> {
     pub target_path: String,
     /// Marker alias used to scan the file for current marker positions.
     pub alias: String,
+    #[serde(skip, default)]
+    pub read_history: Arc<ReadFileHistory>,
 }
 
 impl Tool for EditFileTool<'_> {
@@ -155,6 +159,7 @@ impl Tool for EditFileTool<'_> {
                 new_content.push_str(&content[pos + args.old_text.len()..]);
 
                 std::fs::write(&path, &new_content)?;
+                self.read_history.clear();
 
                 Ok(format!(
                     "[edit_file] path={} input_len={} output_len={}\nEdited {}",
@@ -256,6 +261,7 @@ mod tests {
             app_state,
             target_path: file_path.display().to_string(),
             alias: "rik".to_string(),
+            read_history: Arc::default(),
         }
     }
 
@@ -312,6 +318,7 @@ mod tests {
             app_state: &app_state,
             target_path: file_path.display().to_string(),
             alias: "rik".to_string(),
+            read_history: Arc::default(),
         };
 
         tool.call(EditFileArgs {
@@ -343,6 +350,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_edit_file_resets_shared_read_history() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let target_path = dir.path().join("target.txt");
+        let context_path = dir.path().join("context.txt");
+        std::fs::write(&target_path, "before\nrik: replace me\nafter\n")?;
+        std::fs::write(&context_path, "unchanged context")?;
+
+        let app_state = crate::state::AppState::new(
+            dir.path().to_path_buf(),
+            crate::config::Config::default(),
+        )?;
+        let read_history = Arc::new(ReadFileHistory::default());
+        let read_tool = crate::tools::ReadFileTool::with_history(&app_state, read_history.clone());
+        let edit_tool = EditFileTool {
+            app_state: &app_state,
+            target_path: target_path.display().to_string(),
+            alias: "rik".to_string(),
+            read_history,
+        };
+        let read_args = || crate::tools::read_file::ReadFileArgs {
+            path: context_path.display().to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        assert!(
+            read_tool
+                .call(read_args())
+                .await?
+                .ends_with("unchanged context")
+        );
+        assert_eq!(
+            read_tool.call(read_args()).await.unwrap_err().to_string(),
+            "Context known"
+        );
+
+        edit_tool
+            .call(EditFileArgs {
+                old_text: "rik: replace me".into(),
+                new_text: "replaced".into(),
+            })
+            .await?;
+
+        assert!(
+            read_tool
+                .call(read_args())
+                .await?
+                .ends_with("unchanged context")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_edit_file_not_found() {
         let app_state = crate::state::AppState::new(
             std::env::current_dir().unwrap(),
@@ -353,6 +413,7 @@ mod tests {
             app_state: &app_state,
             target_path: "/nonexistent".to_string(),
             alias: "rik".to_string(),
+            read_history: Arc::default(),
         };
         let result = tool
             .call(EditFileArgs {
@@ -556,6 +617,7 @@ mod tests {
             app_state: &app_state,
             target_path: "src/main.rs".to_string(),
             alias: "rik".to_string(),
+            read_history: Arc::default(),
         };
         let def = tool.definition(String::new()).await;
         assert!(def.description.contains("src/main.rs"));

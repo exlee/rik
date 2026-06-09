@@ -1,8 +1,12 @@
+use dashmap::DashMap;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fmt::Write;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // ReadFile tool
@@ -31,18 +35,133 @@ impl From<std::io::Error> for ReadFileError {
 }
 
 /// A tool that reads the contents of an existing file.
+#[derive(Default)]
+struct ReadHistory {
+    content_hash: u64,
+    ranges: Vec<(usize, usize)>,
+}
+
+#[derive(Default)]
+pub struct ReadFileHistory {
+    files: DashMap<PathBuf, ReadHistory>,
+}
+
+impl ReadFileHistory {
+    pub fn clear(&self) {
+        self.files.clear();
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct ReadFileTool<'a> {
     #[serde(skip, default = "crate::state::get")]
     pub app_state: &'a crate::state::AppState,
+    #[serde(skip, default)]
+    pub read_history: Arc<ReadFileHistory>,
 }
 
 impl Default for ReadFileTool<'static> {
     fn default() -> Self {
         Self {
             app_state: crate::state::get(),
+            read_history: Arc::default(),
         }
     }
+}
+
+impl<'a> ReadFileTool<'a> {
+    pub fn with_history(
+        app_state: &'a crate::state::AppState,
+        read_history: Arc<ReadFileHistory>,
+    ) -> Self {
+        Self {
+            app_state,
+            read_history,
+        }
+    }
+
+    #[cfg(test)]
+    fn new(app_state: &'a crate::state::AppState) -> Self {
+        Self::with_history(app_state, Arc::default())
+    }
+}
+
+fn unread_ranges(requested: (usize, usize), known: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let (mut cursor, end) = requested;
+    let mut unread = Vec::new();
+
+    for &(known_start, known_end) in known {
+        if known_end <= cursor {
+            continue;
+        }
+        if known_start >= end {
+            break;
+        }
+        if known_start > cursor {
+            unread.push((cursor, known_start.min(end)));
+        }
+        cursor = cursor.max(known_end);
+        if cursor >= end {
+            break;
+        }
+    }
+
+    if cursor < end {
+        unread.push((cursor, end));
+    }
+    unread
+}
+
+fn remember_range(known: &mut Vec<(usize, usize)>, range: (usize, usize)) {
+    known.push(range);
+    known.sort_unstable_by_key(|&(start, _)| start);
+
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(known.len());
+    for &(start, end) in known.iter() {
+        if let Some((_, previous_end)) = merged.last_mut()
+            && start <= *previous_end
+        {
+            *previous_end = (*previous_end).max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    *known = merged;
+}
+
+fn format_ranges(
+    path: &Path,
+    args: &ReadFileArgs,
+    lines: &[&str],
+    requested: (usize, usize),
+    ranges: &[(usize, usize)],
+) -> String {
+    let mut header = format!("[read_file] path={}", path.display());
+    if let Some(offset) = args.offset {
+        write!(header, " offset={offset}").ok();
+    }
+    if let Some(limit) = args.limit {
+        write!(header, " limit={limit}").ok();
+    }
+
+    if ranges == [requested] {
+        let (start, end) = ranges[0];
+        return format!("{header}\n{}", lines[start..end].join("\n"));
+    }
+
+    let chunks = ranges
+        .iter()
+        .map(|&(start, end)| {
+            format!(
+                "[lines {}-{}]\n{}",
+                start + 1,
+                end,
+                lines[start..end].join("\n")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{header}\n{chunks}")
 }
 
 impl Tool for ReadFileTool<'_> {
@@ -57,7 +176,8 @@ impl Tool for ReadFileTool<'_> {
             name: Self::NAME.to_string(),
             description: "Read the contents of an existing file. \
                           Optionally specify offset (1-based line number) and limit \
-                          to read only a portion of the file."
+                          to read only a portion of the file. Lines already returned \
+                          by this tool are omitted from later reads."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -91,12 +211,15 @@ impl Tool for ReadFileTool<'_> {
         }
 
         let content = std::fs::read_to_string(&path)?;
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        let content_hash = hasher.finish();
 
         let lines: Vec<&str> = content.lines().collect();
 
         let start = args.offset.unwrap_or(1).saturating_sub(1);
         let end = if let Some(limit) = args.limit {
-            (start + limit).min(lines.len())
+            start.saturating_add(limit).min(lines.len())
         } else {
             lines.len()
         };
@@ -105,15 +228,24 @@ impl Tool for ReadFileTool<'_> {
             return Ok(String::new());
         }
 
-        let result: Vec<&str> = lines[start..end].to_vec();
-        let mut header = format!("[read_file] path={}", path.display());
-        if let Some(offset) = args.offset {
-            write!(header, " offset={offset}").ok();
+        let unread = {
+            let mut known = self.read_history.files.entry(path.clone()).or_default();
+            if known.content_hash != content_hash {
+                known.content_hash = content_hash;
+                known.ranges.clear();
+            }
+            let unread = unread_ranges((start, end), &known.ranges);
+            for &range in &unread {
+                remember_range(&mut known.ranges, range);
+            }
+            unread
+        };
+
+        if unread.is_empty() {
+            return Err(ReadFileError("Context known".to_string()));
         }
-        if let Some(limit) = args.limit {
-            write!(header, " limit={limit}").ok();
-        }
-        Ok(format!("{header}\n{}", result.join("\n")))
+
+        Ok(format_ranges(&path, &args, &lines, (start, end), &unread))
     }
 }
 
@@ -153,9 +285,7 @@ mod tests {
         std::fs::write(&file_path, "line1\nline2\nline3")?;
 
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -183,9 +313,7 @@ mod tests {
         std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5")?;
 
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -205,9 +333,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_file_not_found() {
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: ".rik_test_nonexistent/file.txt".to_string(),
@@ -223,9 +349,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_file_rejects_absolute_path() {
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: "/etc/hosts".to_string(),
@@ -246,9 +370,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_file_rejects_path_traversal() {
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: "../../etc/passwd".to_string(),
@@ -273,9 +395,7 @@ mod tests {
         std::fs::write(&file_path, "line1\nline2")?;
 
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -306,9 +426,7 @@ mod tests {
         std::fs::write(&file_path, "line1\nline2\nline3")?;
 
         let app_state = app_state();
-        let tool = ReadFileTool {
-            app_state: &app_state,
-        };
+        let tool = ReadFileTool::new(&app_state);
         let result = tool
             .call(ReadFileArgs {
                 path: rel_file.clone(),
@@ -334,5 +452,106 @@ mod tests {
         );
         cleanup_rel(&rel);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_file_omits_known_lines_and_splits_unread_ranges() -> anyhow::Result<()> {
+        let (abs, rel) = make_relative_dir("known_lines");
+        let file_path = abs.join("test.txt");
+        let rel_file = format!("{}/test.txt", rel);
+        let content = (1..=130)
+            .map(|line| format!("line{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&file_path, content)?;
+
+        let app_state = app_state();
+        let tool = ReadFileTool::new(&app_state);
+
+        let first = tool
+            .call(ReadFileArgs {
+                path: rel_file.clone(),
+                offset: Some(20),
+                limit: Some(11),
+            })
+            .await?;
+        assert!(first.ends_with(
+            "line20\nline21\nline22\nline23\nline24\nline25\nline26\nline27\nline28\nline29\nline30"
+        ));
+
+        let known = tool
+            .call(ReadFileArgs {
+                path: rel_file.clone(),
+                offset: Some(20),
+                limit: Some(6),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(known.to_string(), "Context known");
+
+        let preceding = tool
+            .call(ReadFileArgs {
+                path: rel_file.clone(),
+                offset: Some(10),
+                limit: Some(21),
+            })
+            .await?;
+        assert!(preceding.ends_with(
+            "line10\nline11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19"
+        ));
+        assert!(preceding.contains("[lines 10-19]"));
+        assert!(!preceding.contains("line20"));
+
+        let split = tool
+            .call(ReadFileArgs {
+                path: rel_file,
+                offset: Some(1),
+                limit: Some(100),
+            })
+            .await?;
+        assert!(split.contains("[lines 1-9]\nline1"));
+        assert!(split.contains("[lines 31-100]\nline31"));
+        assert!(!split.contains("\nline20\n"));
+
+        cleanup_rel(&rel);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_file_forgets_ranges_when_file_changes() -> anyhow::Result<()> {
+        let (abs, rel) = make_relative_dir("changed_file");
+        let file_path = abs.join("test.txt");
+        let rel_file = format!("{}/test.txt", rel);
+        std::fs::write(&file_path, "before")?;
+
+        let app_state = app_state();
+        let tool = ReadFileTool::new(&app_state);
+        let args = || ReadFileArgs {
+            path: rel_file.clone(),
+            offset: None,
+            limit: None,
+        };
+
+        assert!(tool.call(args()).await?.ends_with("before"));
+        assert_eq!(
+            tool.call(args()).await.unwrap_err().to_string(),
+            "Context known"
+        );
+
+        std::fs::write(&file_path, "after")?;
+        assert!(tool.call(args()).await?.ends_with("after"));
+
+        cleanup_rel(&rel);
+        Ok(())
+    }
+
+    #[test]
+    fn test_unread_ranges_handles_multiple_known_gaps() {
+        let known = vec![(105, 110), (115, 120)];
+
+        assert_eq!(
+            unread_ranges((100, 130), &known),
+            vec![(100, 105), (110, 115), (120, 130)]
+        );
     }
 }
