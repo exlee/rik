@@ -266,4 +266,17 @@ mod tests {
 
         assert!(output.starts_with("rustc "));
     }
+
+    #[tokio::test]
+    async fn returns_stdout_and_stderr_to_the_caller() {
+        let tool = DynamicCommandTool::parse(
+            "rik +tool: sh -c 'printf stdout; printf stderr >&2'",
+            "rik",
+            Path::new("/tmp"),
+        )
+        .unwrap();
+        let output = ToolDyn::call(&tool, "{}".to_string()).await.unwrap();
+
+        assert_eq!(output, "stdout\nstderr");
+    }
 }
