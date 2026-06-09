@@ -207,14 +207,15 @@ impl ToolDyn for DynamicCommandTool {
     }
 }
 
-pub type DynamicToolsTuple = (HashMap<String,String>, Vec<Box<dyn ToolDyn>>);
+pub type DynamicToolsHashMap = HashMap<String, (String, String)>;
+pub type DynamicToolsTuple = (DynamicToolsHashMap, Vec<Box<dyn ToolDyn>>);
 pub fn find_dynamic_tools(content: &str, alias: &str, working_dir: &Path) -> DynamicToolsTuple {
     let mut names = HashSet::new();
     let tools: Vec<DynamicCommandTool> = content
         .lines()
         .filter_map(|line| DynamicCommandTool::parse(line, alias, working_dir))
         .filter(|tool| names.insert(tool.name.clone())).collect();
-    let toolhash: HashMap<String, String> = tools.clone().into_iter().map(|t| (t.name, t.command)).collect();
+    let toolhash: DynamicToolsHashMap = tools.clone().into_iter().map(|t| (t.name, (t.command, t.description))).collect();
     let tooldefs = tools.into_iter()
         .map(|tool| Box::new(tool) as Box<dyn ToolDyn>)
         .collect();

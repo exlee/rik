@@ -138,7 +138,7 @@ fn surrounding_lines(content: &str, center_line: usize, radius: usize) -> String
 }
 
 /// Preamble injected into the agent for file-completion mode.
-fn make_preamble(alias: &str) -> String {
+fn make_preamble(alias: &str, tool_inject: &str) -> String {
     format!("\
 You are an in-place editor. A file contains '{alias}: <instruction>' markers that \
 must be replaced with real content. The file is a working document (code, prose, \
@@ -151,6 +151,7 @@ Tools:
 - read_file: read other files for context (types, imports, conventions).
 - edit_file: replace exact text in the target file. old_text must be unique.
 - list_files: discover files in the project.
+{tool_inject}
 
 Rules:
 - Study the surrounding lines BEFORE editing. Your replacement must fit the \
@@ -230,8 +231,7 @@ where
         .default_max_turns(30);
     let (_, tools) = tools::find_dynamic_tools(content, alias, &app_state.path);
     if question_allows_dynamic_tools(question_marker) {
-        agent_builder =
-            agent_builder.tools(tools);
+        agent_builder = agent_builder.tools(tools);
     }
     let agent = agent_builder.build();
     let mut stream = agent.stream_prompt(&prompt).await;
@@ -445,6 +445,14 @@ where
             "\nCONTEXT NOTES (background info, not tasks — these lines will be auto-removed after work):\n{ctx_items}"
         )
     };
+    let (tool_hash, dynamic_tools) =
+        tools::find_dynamic_tools(&content_before, alias, &app_state.path);
+
+    let tool_inject = tool_hash
+        .iter()
+        .map(|(k, (_, d))| format!("- {k}: {d}"))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let prompt = format!(
         "Target file: {file_display}\n\
@@ -459,8 +467,7 @@ where
         context_section,
     );
 
-    let preamble = make_preamble(alias);
-    let (tool_hash, dynamic_tools) = tools::find_dynamic_tools(&content_before, alias, &app_state.path);
+    let preamble = make_preamble(alias, &tool_inject);
     let agent_builder = comp_client
         .agent(model_name)
         .preamble(&preamble)
@@ -606,16 +613,27 @@ where
                     }
                     "send_message" => continue,
                     dynamic if tool_hash.contains_key(dynamic) => {
-                        let cmd = tool_hash.get(dynamic).cloned().unwrap_or_default();
+                        let (cmd, _) = tool_hash.get(dynamic).cloned().unwrap_or_default();
                         let params = if let Some(obj) = tool_call.function.arguments.as_object() {
-                            obj.iter().map(|(k,v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")
+                            obj.iter()
+                                .map(|(k, v)| format!("{k}={v}"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
                         } else if let Some(list) = tool_call.function.arguments.as_array() {
-                            list.clone().into_iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(" ")
+                            list.clone()
+                                .into_iter()
+                                .map(|v| format!("{v}"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
                         } else {
                             tool_call.function.arguments.to_string()
                         };
-                        format!("{cmd} -- {params}")
-                    },
+                        if params.is_empty() {
+                            format!("\"{cmd}\"")
+                        } else {
+                            format!("\"{cmd}\" params: {params}")
+                        }
+                    }
                     _ => tool_call.function.arguments.to_string(),
                 };
                 if output.tool_calls {
