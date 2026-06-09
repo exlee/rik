@@ -22,9 +22,17 @@
 ```
          
 
-rik is not your typical AI coding assistant. It doesn't do autocomplete, doesn't chat, and won't try to explain quantum physics. Instead, rik does one thing well: **find markers in your files and replace them with real content.**
+rik is not your typical AI coding assistant. It doesn't do autocomplete or open a chat window. Instead, rik works through markers in your files: it can replace instructions with real content or answer read-only questions in place.
 
 Think of it as leaving sticky notes for an LLM and having someone actually follow through.
+
+## News
+
+### rik 0.3.0 can answer questions
+
+End a marker with `?` and rik answers it without editing the file. Questions can also opt into file-defined dynamic tools.
+
+![rik can answer questions](./assets/rik_answers.png)
 
 ## How it works
 
@@ -176,15 +184,21 @@ cargo build --release
 Create `~/.config/rik/rik.toml` with your LLM provider settings and optional diff tool.
 
 ```toml
+# Optional: custom diff command. Use $pre and $post as placeholders.
+diff_tool = ["difft", "--color", "always", "$pre", "$post"]
+
+# Optional: print extra personality around edit tasks.
+personality = false
+
+# Keep edits within a single marker's region (recommended default).
+marker_limits_edition_range = true
+
 [model]
 provider = "openai"
 model = "gpt-4o"
 # api_key is optional — omit to read from environment variable
 # url is optional — omit to use the provider default endpoint
 #url = "https://api.openai.com/v1"
-
-# Optional: custom diff command. Use $pre and $post as placeholders.
-diff_tool = ["difft", "--color", "always", "$pre", "$post"]
 ```
 
 ### Supported providers
@@ -292,7 +306,7 @@ This would look for `todo: <instruction>` markers instead.
 
 ## Tools
 
-rik gives the agent three tools during processing:
+rik gives the agent four file tools during processing:
 
 | Tool | Purpose |
 |---|---|
@@ -301,7 +315,7 @@ rik gives the agent three tools during processing:
 | `write_file` | Create new files (refuses to overwrite existing ones). |
 | `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
 
-All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 20 turns before producing final edits.
+All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 30 turns before producing final edits.
 
 ### Dynamic tools
 

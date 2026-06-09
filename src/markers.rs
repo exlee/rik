@@ -103,7 +103,7 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
     let mut markers = Vec::new();
     let mut i = 0;
 
-    while i < lines.len() {
+    'lines: while i < lines.len() {
         let line = lines[i];
         for prefix in prefixes.iter() {
             if let Some(pos) = line.find(prefix) {
@@ -220,7 +220,7 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                             prefix: prefix.clone(),
                         });
                         i = j + 1; // skip past closing line
-                        continue;
+                        continue 'lines;
                     } else {
                         // Mismatched/unclosed delimiter -- treat opening line as single-line marker.
                         let kind = if is_context_query(after) {
@@ -240,7 +240,7 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                             prefix: prefix.clone(),
                         });
                         i += 1;
-                        continue;
+                        continue 'lines;
                     }
                 } else if !after.is_empty() {
                     // Single-line marker — classify as Context or Task.
@@ -280,7 +280,7 @@ mod tests {
             end_line: end,
             kind,
             query: query.to_string(),
-            prefix: format!(""),
+            prefix: "rik:".to_string(),
         }
     }
 

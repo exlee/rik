@@ -54,7 +54,7 @@ impl Default for Config {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct ModelConfig {
     /// Which provider to use. Defaults to "openai".
     ///
@@ -67,11 +67,13 @@ pub struct ModelConfig {
     /// Required for `openaicompatible`.
     ///
     /// Examples:
-    ///   openai:          "https://api.openai.com/v1"       (default)
-    ///   anthropic:       "https://api.anthropic.com"        (default)
-    ///   gemini:          "https://generativelanguage.googleapis.com" (default)
-    ///   ollama:          "http://localhost:11434"           (default)
-    ///   openaicompatible: "<your-endpoint>"                 (required)
+    /// ```text
+    /// openai:           "https://api.openai.com/v1"                 (default)
+    /// anthropic:        "https://api.anthropic.com"                  (default)
+    /// gemini:           "https://generativelanguage.googleapis.com" (default)
+    /// ollama:           "http://localhost:11434"                     (default)
+    /// openaicompatible: "<your-endpoint>"                            (required)
+    /// ```
     pub url: Option<String>,
 
     /// API key. Read from environment variable when omitted.
@@ -94,17 +96,6 @@ pub struct ModelConfig {
 
     /// Model name (e.g. "gpt-4o", "claude-sonnet-4-20250514", "gemini-2.5-pro").
     pub model: String,
-}
-
-impl Default for ModelConfig {
-    fn default() -> Self {
-        Self {
-            provider: Provider::default(),
-            url: None,
-            api_key: None,
-            model: String::new(),
-        }
-    }
 }
 
 fn find_config_path() -> Option<std::path::PathBuf> {

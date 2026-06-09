@@ -130,7 +130,7 @@ mod tests {
     /// Create a subdirectory under cwd and return its relative path.
     /// Caller is responsible for cleaning up.
     fn make_relative_dir(name: &str) -> (std::path::PathBuf, String) {
-        let rel = std::path::PathBuf::from(format!(".rik_test_{}", name));
+        let rel = std::path::PathBuf::from(format!(".rik_test_{}_{}", std::process::id(), name));
         let abs = std::env::current_dir().unwrap().join(&rel);
         std::fs::create_dir_all(&abs).ok();
         (abs, rel.to_string_lossy().to_string())

@@ -1,9 +1,9 @@
 [package]
 name = "rik"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.93"
-description = "Find markers in your files and replace them with LLM-generated content"
+description = "Complete file markers with LLM-generated edits and answers"
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/exlee/rik"
@@ -18,7 +18,7 @@ path = "src/main.rs"
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-rig = { version = "0.37.0", features = ["derive"] }
+rig = { package = "rig-core", version = "0.37.0", default-features = false, features = ["derive", "rustls"] }
 futures = "0.3"
 glob = "0.3"
 ignore = "0.4"

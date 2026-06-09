@@ -10,9 +10,10 @@ static STOP: OnceLock<Arc<RwLock<StopStatus>>> = OnceLock::new();
 
 fn stop() -> StopStatusRef {
     STOP.get_or_init(|| {
-    let stop = StopStatus::default();
-    Arc::new(RwLock::new(stop))
-    }).clone()
+        let stop = StopStatus::default();
+        Arc::new(RwLock::new(stop))
+    })
+    .clone()
 }
 pub fn set_stop() {
     let stop = stop();

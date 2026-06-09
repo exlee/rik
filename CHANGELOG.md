@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-09
+
 ### Added
 - **`marker_limits_edition_range` config** — when enabled (default), `edit_file` rejects edits whose text spans across multiple markers, ensuring each edit stays scoped to a single marker region
+- **Question mode** — markers ending with `?`, starting with `?`, or using the `rik?:` prefix receive a read-only answer and remain in the file
+- **Dynamic command tools** — define per-file tools with `rik +tool: <command>` and opt questions into them with `+tool` or `+tools`
+- In-memory question tracking prevents watch mode from repeatedly answering the same marker
+
+### Changed
+- Process task markers individually and keep question output focused on the answer
+- Make halt markers local to the marker that contains them instead of skipping the whole file
+- Improve dynamic-tool, denied-request, and tool-parameter output
+- Depend directly on `rig-core` to avoid shipping unused integration dependencies
+
+### Fixed
+- Avoid reverting completed work when the agent uses `send_message`
+- Continue scanning the line immediately after a multi-line marker
 
 ## [0.2.1] - 2026-05-30
 

@@ -148,11 +148,6 @@ fn parse_part(word: String) -> CommandPart {
 #[error("{0}")]
 struct DynamicCommandError(String);
 
-impl DynamicCommandTool {
-    pub fn description(&self) -> String {
-        self.description.clone()
-   }
-}
 impl ToolDyn for DynamicCommandTool {
     fn name(&self) -> String {
         self.name.clone()
@@ -214,9 +209,15 @@ pub fn find_dynamic_tools(content: &str, alias: &str, working_dir: &Path) -> Dyn
     let tools: Vec<DynamicCommandTool> = content
         .lines()
         .filter_map(|line| DynamicCommandTool::parse(line, alias, working_dir))
-        .filter(|tool| names.insert(tool.name.clone())).collect();
-    let toolhash: DynamicToolsHashMap = tools.clone().into_iter().map(|t| (t.name, (t.command, t.description))).collect();
-    let tooldefs = tools.into_iter()
+        .filter(|tool| names.insert(tool.name.clone()))
+        .collect();
+    let toolhash: DynamicToolsHashMap = tools
+        .clone()
+        .into_iter()
+        .map(|t| (t.name, (t.command, t.description)))
+        .collect();
+    let tooldefs = tools
+        .into_iter()
         .map(|tool| Box::new(tool) as Box<dyn ToolDyn>)
         .collect();
 

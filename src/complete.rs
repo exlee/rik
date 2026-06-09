@@ -31,6 +31,14 @@ struct MarkerOutput {
     personality: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ProcessingOptions<'a> {
+    alias: &'a str,
+    diff_tool: Option<&'a Vec<String>>,
+    verbose: bool,
+    personality: bool,
+}
+
 impl MarkerOutput {
     fn for_marker(marker: &crate::markers::FoundMarker, verbose: bool, personality: bool) -> Self {
         if is_question_marker(marker) {
@@ -80,11 +88,13 @@ macro_rules! define_provider_dispatch {
                             app_state,
                             &client,
                             &cfg.model,
-                            alias,
-                            diff_tool,
                             pattern,
-                            verbose,
-                            personality,
+                            ProcessingOptions {
+                                alias,
+                                diff_tool,
+                                verbose,
+                                personality,
+                            },
                         ).await
                     }
                 )*
@@ -345,16 +355,19 @@ async fn process_file_markers<C>(
     app_state: &AppState,
     comp_client: &C,
     model_name: &str,
-    alias: &str,
-    diff_tool: Option<&Vec<String>>,
     file_path: &std::path::Path,
-    verbose: bool,
-    personality: bool,
+    options: ProcessingOptions<'_>,
 ) -> anyhow::Result<ScanOutcome>
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
 {
+    let ProcessingOptions {
+        alias,
+        diff_tool,
+        verbose,
+        personality,
+    } = options;
     let content_before = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
 
@@ -693,16 +706,14 @@ async fn process_scan_and_complete<C>(
     app_state: &AppState,
     comp_client: &C,
     model_name: &str,
-    alias: &str,
-    diff_tool: Option<&Vec<String>>,
     pattern: &str,
-    verbose: bool,
-    personality: bool,
+    options: ProcessingOptions<'_>,
 ) -> anyhow::Result<ScanOutcome>
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
 {
+    let alias = options.alias;
     let files = expand_glob(app_state, pattern)?;
     if files.is_empty() {
         anyhow::bail!("No files matched pattern: {pattern}");
@@ -712,17 +723,9 @@ where
     for file_path in &files {
         let mut file_outcome = ScanOutcome::default();
         loop {
-            let processed = process_file_markers(
-                app_state,
-                comp_client,
-                model_name,
-                alias,
-                diff_tool,
-                file_path,
-                verbose,
-                personality,
-            )
-            .await?;
+            let processed =
+                process_file_markers(app_state, comp_client, model_name, file_path, options)
+                    .await?;
             if processed.completed_markers == 0 && processed.answered_questions == 0 {
                 break;
             }
