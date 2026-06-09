@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     if cli.watch {
-        crate::keyboard::start_space_listener();
+        crate::keyboard::start_escape_listener();
         complete::cmd_watch(state, &cli.alias, cli.pattern, cli.verbose).await
     } else {
         complete::cmd_complete(state, &cli.alias, cli.pattern, cli.verbose).await

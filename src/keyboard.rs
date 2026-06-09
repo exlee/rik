@@ -44,12 +44,18 @@ pub fn clear_stop() {
     stop_status.soft = false;
 }
 
-/// Check if Space was pressed on stdin using non-canonical (raw) mode.
+const ESCAPE: u8 = 0x1b;
+
+fn is_escape_press(bytes: &[u8]) -> bool {
+    bytes == [ESCAPE]
+}
+
+/// Check if Escape was pressed on stdin using non-canonical (raw) mode.
 ///
 /// Briefly sets stdin to non-canonical + non-blocking, reads pending bytes,
 /// then immediately restores the original termios.
 #[cfg(unix)]
-pub fn poll_space_key() -> bool {
+pub fn poll_escape_key() -> bool {
     let fd = 0;
     let mut termios: libc::termios = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 {
@@ -66,38 +72,38 @@ pub fn poll_space_key() -> bool {
     }
 
     let mut buf = [0u8; 32];
-    let space_pressed = match unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) } {
-        n if n > 0 => buf[..n as usize].contains(&b' '),
+    let escape_pressed = match unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) } {
+        n if n > 0 => is_escape_press(&buf[..n as usize]),
         _ => false,
     };
 
     // Always restore original settings.
     unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
 
-    if space_pressed {
-        eprintln!("\nStopped.");
+    if escape_pressed {
+        eprintln!("\n[user cancel received]");
     }
 
-    space_pressed
+    escape_pressed
 }
 
 /// No-op on non-Unix (Windows) -- no termios support.
 #[cfg(not(unix))]
-pub fn poll_space_key() -> bool {
+pub fn poll_escape_key() -> bool {
     false
 }
 
-/// Spawn a background thread that polls for Space key every 100ms.
+/// Spawn a background thread that polls for Escape key every 100ms.
 /// Sets the internal stop flag when detected. After the flag is cleared
 /// (via `clear_stop()`), the listener automatically resumes polling.
 /// Exits only when `cleanup::is_shutting_down()` becomes true.
-pub fn start_space_listener() {
+pub fn start_escape_listener() {
     tokio::task::spawn_blocking(|| {
         loop {
             if crate::cleanup::is_shutting_down() {
                 break;
             }
-            if poll_space_key() {
+            if poll_escape_key() {
                 set_stop();
                 // Spin until the flag is cleared, then resume listening.
                 while !crate::cleanup::is_shutting_down() && should_stop() {
@@ -107,4 +113,16 @@ pub fn start_space_listener() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_escape_press;
+
+    #[test]
+    fn detects_standalone_escape_key() {
+        assert!(is_escape_press(b"\x1b"));
+        assert!(!is_escape_press(b" "));
+        assert!(!is_escape_press(b"\x1b[A"));
+    }
 }

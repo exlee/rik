@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Use Escape instead of Space to cancel the current processing loop and report `[user cancel received]`
+
 ## [0.3.0] - 2026-06-09
 
 ### Added

@@ -30,10 +30,6 @@
   Run it after edits and print its status and output. Do not feed the result
   back to the model, retry automatically, or widen the editing scope.
 
-## Ideas
-
-- Change `Stopped` -> `User cancel` and consider changing `space` to `esc` instead
-
 ## Bugs
 - rik doesn't clean the ending multiline marker (e.g. `// ]]`)
 
