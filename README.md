@@ -55,6 +55,14 @@ Handle missing keys gracefully with sensible defaults.
 
 Supported delimiters: `[ ]`, `[[ ]]`, `[[[ ]]]`, `( )`, `(( ))`, `((( )))`, `{ }`, `{{ }}`, `{{{ }}}`.
 
+An instruction can follow the opening delimiter:
+
+```
+rik: ( uppercase this
+text to transform
+)
+```
+
 ## Examples
 
 ### Simple inline replacement

@@ -16,24 +16,65 @@ const MULTILINE_DELIMITERS: &[(&str, &str)] = &[
     ("{", "}"),
 ];
 
-/// Check if text after `alias:` is a multi-line opening delimiter.
-/// Returns (open, close) pair if it is.
-fn match_opening_delimiter(text: &str) -> Option<(&'static str, &'static str)> {
+/// Check if text after `alias:` starts with a multi-line opening delimiter.
+/// Returns the delimiter pair and any inline instruction after the opener.
+fn match_opening_delimiter(text: &str) -> Option<(&'static str, &'static str, &str)> {
     let trimmed = text.trim();
     // Match longest first to avoid e.g. [[[ matching as a single [
     for &(open, close) in MULTILINE_DELIMITERS {
         if trimmed == open {
-            return Some((open, close));
+            return Some((open, close, ""));
+        }
+        if let Some(rest) = trimmed.strip_prefix(open)
+            && rest.starts_with(char::is_whitespace)
+        {
+            return Some((open, close, rest.trim_start()));
         }
     }
     None
+}
+
+/// Extract a marker query enclosed by matching delimiters on the same line.
+fn match_inline_delimited_query(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    for &(open, close) in MULTILINE_DELIMITERS {
+        let Some(rest) = trimmed.strip_prefix(open) else {
+            continue;
+        };
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let Some(before_close) = rest.strip_suffix(close) else {
+            continue;
+        };
+        if !before_close.ends_with(char::is_whitespace) {
+            continue;
+        }
+        let query = before_close.trim();
+        if !query.is_empty() {
+            return Some(query);
+        }
+    }
+    None
+}
+
+/// Check whether a line contains only a delimiter, optionally preceded by the
+/// same decoration that appeared before the opening marker's alias.
+fn matches_decorated_delimiter(line: &str, delimiter: &str, decoration: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed == delimiter
+        || (!decoration.is_empty()
+            && trimmed
+                .strip_prefix(decoration)
+                .is_some_and(|rest| rest.trim_start() == delimiter))
 }
 
 /// Find all markers matching the given alias prefix in content.
 ///
 /// Single-line: `{alias}: <query>` -- everything after the prefix on the same line.
 ///
-/// Multi-line: `{alias}: <open>` starts a block, `{alias}: <close>` ends it.
+/// Multi-line: `{alias}: <open> [instruction]` starts a block, and a matching
+/// close delimiter ends it.
 /// Supported delimiter pairs: `[`/`]`, `[[`/`]]`, `[[[`/`]]]`,
 /// `(`/`)`, `((`/`))`, `(((`/`)))`, `{`/`}`, `{{`/`}}`, `{{{`/`}}}`.
 /// Content between open and close is the query, with leading whitespace stripped
@@ -88,7 +129,8 @@ fn context_inner(query: &str) -> String {
 /// Single-line: `{alias}: <query>` -- everything after the prefix on the same line.
 ///   If `<query>` starts and ends with `/` it is classified as `Context`.
 ///
-/// Multi-line: `{alias}: <open>` starts a block, `{alias}: <close>` ends it.
+/// Multi-line: `{alias}: <open> [instruction]` starts a block, and a matching
+/// close delimiter ends it.
 /// Supported delimiter pairs: `[`/`]`, `[[`/`]]`, `[[[`/`]]]`,
 /// `(`/`)`, `((`/`))`, `(((`/`)))`, `{`/`}`, `{{`/`}}`, `{{{`/`}}}`.
 /// Content between open and close is the query, with leading whitespace stripped
@@ -109,7 +151,18 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
             if let Some(pos) = line.find(prefix) {
                 let after = line[pos + prefix.len()..].trim();
 
-                if let Some((open, close)) = match_opening_delimiter(after) {
+                if let Some(query) = match_inline_delimited_query(after) {
+                    markers.push(FoundMarker {
+                        start_line: i + 1,
+                        end_line: i + 1,
+                        kind: MarkerKind::Task,
+                        query: query.to_string(),
+                        prefix: prefix.clone(),
+                    });
+                } else if let Some((open, close, inline_instruction)) =
+                    match_opening_delimiter(after)
+                {
+                    let decoration = line[..pos].trim();
                     // Multi-line marker: collect lines until closing delimiter.
                     // For single-char delimiters we track nesting depth so that
                     // balanced pairs inside the body don't prematurely close the block.
@@ -126,7 +179,11 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                         None
                     };
 
-                    let mut inner_lines: Vec<String> = Vec::new();
+                    let mut inner_lines: Vec<String> = if inline_instruction.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![inline_instruction.to_string()]
+                    };
                     let mut found_close = false;
                     let mut depth: usize = 1; // started at depth 1 from the opening line
 
@@ -168,12 +225,11 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                             }
                             local_depth_delta
                         } else {
-                            // Multi-char delimiter: check if the trimmed line is exactly the close token.
-                            // We need to count occurrences for cases like "]] ]]" but keep it simple:
-                            // atomic match — trimmed line equals close string counts as 1 close.
-                            if content_line.trim() == close {
+                            // Multi-char delimiters match atomically, optionally with
+                            // the opening marker's decoration.
+                            if matches_decorated_delimiter(content_line, close, decoration) {
                                 -1
-                            } else if content_line.trim() == open {
+                            } else if matches_decorated_delimiter(content_line, open, decoration) {
                                 1
                             } else {
                                 0
@@ -414,6 +470,152 @@ mod tests {
     }
 
     #[test]
+    fn test_find_markers_multiline_with_inline_instruction() {
+        let content = "before\nrik: ( uppercase this\nand entertain ourselves.\n)\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(
+            markers[0],
+            task(2, 4, "uppercase this\nand entertain ourselves.")
+        );
+    }
+
+    #[test]
+    fn test_find_markers_same_line_delimited_instruction() {
+        let markers = find_markers("rik: [[ write hi below ]]", "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 1, "write hi below"));
+    }
+
+    #[test]
+    fn test_find_markers_same_line_delimited_instruction_all_delimiters() {
+        for &(open, close) in MULTILINE_DELIMITERS {
+            let content = format!("rik: {open} do something {close}");
+            let markers = find_markers(&content, "rik");
+
+            assert_eq!(markers.len(), 1, "failed for {open} {close}");
+            assert_eq!(
+                markers[0],
+                task(1, 1, "do something"),
+                "failed for {open} {close}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_markers_same_line_delimited_instruction_keeps_nested_expression() {
+        let markers = find_markers("rik: ( sum (3 + 4) )", "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 1, "sum (3 + 4)"));
+    }
+
+    #[test]
+    fn test_find_markers_same_line_delimiters_require_whitespace_boundaries() {
+        let markers = find_markers("rik: [[write hi below]]", "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 1, "[[write hi below]]"));
+    }
+
+    #[test]
+    fn test_find_markers_inline_instruction_all_delimiters() {
+        for &(open, close) in MULTILINE_DELIMITERS {
+            let content = format!("before\nrik: {open} transform this\nbody\n{close}\nafter");
+            let markers = find_markers(&content, "rik");
+
+            assert_eq!(markers.len(), 1, "failed for {open} {close}");
+            assert_eq!(
+                markers[0],
+                task(2, 4, "transform this\nbody"),
+                "failed for {open} {close}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_markers_inline_instruction_with_decorated_closer() {
+        let content = "before\n// rik: [[ transform this\nbody\n// ]]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 4, "transform this\nbody"));
+    }
+
+    #[test]
+    fn test_find_markers_inline_instruction_with_decorated_single_char_closer() {
+        let content = "// rik: [ uppercase this text\nA lone oak stands.\nDreams of spring.\n// ]";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(
+            markers[0],
+            task(
+                1,
+                4,
+                "uppercase this text\nA lone oak stands.\nDreams of spring."
+            )
+        );
+    }
+
+    #[test]
+    fn test_find_markers_inline_instruction_with_nested_single_char_delimiters() {
+        let content = "before\nrik: ( simplify this\nvalue = (one + two)\n)\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 4, "simplify this\nvalue = (one + two)"));
+    }
+
+    #[test]
+    fn test_find_markers_inline_sum_with_nested_parenthesized_expression() {
+        let content = "rik: ( sum these numbers\n1\n2\n(3 + 4)\n5\n)";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(
+            markers[0],
+            task(1, 6, "sum these numbers\n1\n2\n(3 + 4)\n5")
+        );
+    }
+
+    #[test]
+    fn test_find_markers_triple_bracket_instruction_ignores_single_brackets_in_body() {
+        let content = "rik: [[[ remove [ from this text\na [b [c [d\n[e [f g h\n]]]";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(
+            markers[0],
+            task(1, 4, "remove [ from this text\na [b [c [d\n[e [f g h")
+        );
+    }
+
+    #[test]
+    fn test_find_markers_inline_instruction_can_be_only_query_content() {
+        let content = "before\nrik: ( do something\n)\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 3, "do something"));
+    }
+
+    #[test]
+    fn test_find_markers_inline_instruction_preserves_later_marker() {
+        let content = "rik: ( uppercase this\nbody\n)\nrik: later task";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0], task(1, 3, "uppercase this\nbody"));
+        assert_eq!(markers[1], task(4, 4, "later task"));
+    }
+
+    #[test]
+    fn test_find_markers_delimiter_without_whitespace_remains_single_line() {
+        let markers = find_markers("rik: (uppercase this", "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 1, "(uppercase this"));
+    }
+
+    #[test]
+    fn test_find_markers_unclosed_inline_instruction_remains_single_line() {
+        let markers = find_markers("rik: ( uppercase this\nbody", "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 1, "( uppercase this"));
+    }
+
+    #[test]
     fn test_find_markers_multiline_curly_braces() {
         let content = "before\nrik: {{\nA\nB\nC\n}}\nafter";
         let markers = find_markers(content, "rik");
@@ -511,6 +713,38 @@ mod tests {
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0], task(2, 4, "content line"));
+    }
+
+    #[test]
+    fn test_find_markers_multiline_closing_decorated_delimiter() {
+        let content = "before\n// rik: [[\ncontent line\n// ]]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 4, "content line"));
+    }
+
+    #[test]
+    fn test_find_markers_multiline_other_decorated_delimiter() {
+        let content = "before\n# rik: ((\ncontent line\n# ))\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 4, "content line"));
+    }
+
+    #[test]
+    fn test_find_markers_decorated_opening_accepts_bare_closing_delimiter() {
+        let content = "before\n// rik: [[\ncontent line\n]]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 4, "content line"));
+    }
+
+    #[test]
+    fn test_find_markers_mismatched_decoration_does_not_close_multiline() {
+        let content = "before\n// rik: [[\ncontent line\n# ]]\nmore content\n// ]]\nafter";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(2, 6, "content line\n# ]]\nmore content"));
     }
 
     #[test]

@@ -257,6 +257,19 @@ fn question_text(marker: &crate::markers::FoundMarker) -> String {
         .join(" ")
 }
 
+fn marker_replacement_instruction(marker: &crate::markers::FoundMarker) -> String {
+    if marker.start_line < marker.end_line {
+        format!(
+            "Replace the entire multiline marker span from line {} through line {}, including \
+             the opening marker, enclosed text, and closing delimiter. Do not replace only the \
+             opening marker line.",
+            marker.start_line, marker.end_line
+        )
+    } else {
+        format!("Replace the task marker on line {}.", marker.start_line)
+    }
+}
+
 fn make_question_preamble(alias: &str) -> String {
     format!(
         "You answer questions written in '{alias}:' file markers. This is a strictly read-only \
@@ -344,12 +357,22 @@ fn remove_marker(
         .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
 
     let markers = crate::markers::find_markers(&content, alias);
-    let Some(marker) = markers.iter().find(|marker| {
+    let marker = markers.iter().find(|marker| {
         marker.start_line == completed.start_line
             && marker.end_line == completed.end_line
             && marker.kind == completed.kind
             && marker.query == completed.query
-    }) else {
+    });
+    let marker = marker.or_else(|| {
+        markers.iter().find(|marker| {
+            completed.start_line < completed.end_line
+                && marker.start_line < marker.end_line
+                && marker.start_line == completed.start_line
+                && marker.kind == completed.kind
+                && marker.prefix == completed.prefix
+        })
+    });
+    let Some(marker) = marker else {
         return Ok(false);
     };
 
@@ -495,9 +518,11 @@ where
 
     let file_display = file_path.display().to_string();
     let task_block = format!(
-        "TASK at line {}: {alias}: {}\nSurrounding context:\n{}",
+        "TASK at lines {}-{}: {alias}: {}\n{}\nSurrounding context:\n{}",
         task_marker.start_line,
+        task_marker.end_line,
         task_marker.query,
+        marker_replacement_instruction(&task_marker),
         surrounding_lines(&content_before, task_marker.start_line, 5),
     );
 
@@ -528,7 +553,7 @@ where
          File type: {}\n\
          {}\n\
          {}\n\n\
-         Read the file and any other context you need, then replace this task marker \
+         Read the file and any other context you need, then perform the specified replacement \
          with content that is coherent with the rest of the file.\n\
          Do NOT edit or remove the context note lines yourself; they will be cleaned up automatically.",
         file_extension(file_path),
@@ -975,6 +1000,24 @@ mod tests {
     }
 
     #[test]
+    fn multiline_replacement_instruction_requires_whole_span() {
+        let marker = crate::markers::find_markers(
+            "// rik: [ uppercase this text\nA lone oak stands.\n// ]",
+            "rik",
+        )
+        .remove(0);
+
+        assert_eq!(marker.start_line, 1);
+        assert_eq!(marker.end_line, 3);
+        assert_eq!(
+            marker_replacement_instruction(&marker),
+            "Replace the entire multiline marker span from line 1 through line 3, including the \
+             opening marker, enclosed text, and closing delimiter. Do not replace only the \
+             opening marker line."
+        );
+    }
+
+    #[test]
     fn answered_question_memory_filters_exact_marker_identity() {
         let file = std::path::Path::new("/tmp/question-memory-test.rs");
         let markers = crate::markers::find_markers("rik: why?\nrik: why?", "rik");
@@ -1002,6 +1045,110 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&file)?,
             "rik: why?\nrik: second task\ncontent\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_removes_decorated_multiline_closer() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        std::fs::write(&file, "before\n// rik: [[\nwork\n// ]]\nafter\n")?;
+        let markers = crate::markers::find_markers(&std::fs::read_to_string(&file)?, "rik");
+
+        assert!(remove_marker(&file, "rik", &markers[0])?);
+        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_removes_inline_instruction_multiline_block() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        std::fs::write(
+            &file,
+            "before\nrik: ( uppercase this\nand entertain ourselves.\n)\nafter\n",
+        )?;
+        let markers = crate::markers::find_markers(&std::fs::read_to_string(&file)?, "rik");
+
+        assert_eq!(markers[0].query, "uppercase this\nand entertain ourselves.");
+        assert!(remove_marker(&file, "rik", &markers[0])?);
+        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_removes_inline_block_after_body_was_edited() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = "before\nrik: ( uppercase this\nand entertain ourselves.\n)\nafter\n";
+        std::fs::write(&file, before)?;
+        let completed = crate::markers::find_markers(before, "rik").remove(0);
+
+        std::fs::write(
+            &file,
+            "before\nrik: ( uppercase this\nAND ENTERTAIN OURSELVES.\n)\nafter\n",
+        )?;
+
+        assert!(remove_marker(&file, "rik", &completed)?);
+        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_removes_inline_block_after_body_grows() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = "before\nrik: ( uppercase this\nand entertain ourselves.\n)\nafter\n";
+        std::fs::write(&file, before)?;
+        let completed = crate::markers::find_markers(before, "rik").remove(0);
+
+        std::fs::write(
+            &file,
+            "before\nrik: ( uppercase this\nAND ENTERTAIN\nOURSELVES.\n)\nafter\n",
+        )?;
+
+        assert!(remove_marker(&file, "rik", &completed)?);
+        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_after_edit_preserves_later_marker() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = "before\nrik: ( uppercase this\nbody\n)\nmiddle\nrik: later task\nafter\n";
+        std::fs::write(&file, before)?;
+        let completed = crate::markers::find_markers(before, "rik").remove(0);
+
+        std::fs::write(
+            &file,
+            "before\nrik: ( uppercase this\nEDITED\nBODY\n)\nmiddle\nrik: later task\nafter\n",
+        )?;
+
+        assert!(remove_marker(&file, "rik", &completed)?);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\nmiddle\nrik: later task\nafter\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_does_not_remove_replacement_single_line_marker()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = "before\nrik: original task\nafter\n";
+        std::fs::write(&file, before)?;
+        let completed = crate::markers::find_markers(before, "rik").remove(0);
+
+        std::fs::write(&file, "before\nrik: replacement task\nafter\n")?;
+
+        assert!(!remove_marker(&file, "rik", &completed)?);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\nrik: replacement task\nafter\n"
         );
         Ok(())
     }

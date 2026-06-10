@@ -139,6 +139,19 @@ impl Tool for EditFileTool<'_> {
                     )));
                 }
 
+                if removes_multiline_opener_without_closer(
+                    &marker_spans,
+                    &content,
+                    pos,
+                    &args.old_text,
+                ) {
+                    return Err(EditFileError(
+                        "Edit rejected: replacing a multiline marker's opening line must also \
+                         replace through its closing delimiter."
+                            .to_string(),
+                    ));
+                }
+
                 if self.app_state.config.marker_limits_edition_range
                     && is_edit_over_marker(&marker_spans, &content, pos, &args.old_text)
                 {
@@ -166,6 +179,21 @@ impl Tool for EditFileTool<'_> {
         }
     }
 }
+
+fn removes_multiline_opener_without_closer(
+    marker_spans: &[(usize, usize)],
+    content: &str,
+    pos: usize,
+    old_text: &str,
+) -> bool {
+    let edit_start_line = byte_offset_to_line(content, pos);
+    let edit_end_line = byte_offset_to_line(content, pos + old_text.len().saturating_sub(1));
+
+    marker_spans.iter().any(|&(start, end)| {
+        start < end && edit_start_line <= start && edit_end_line >= start && edit_end_line < end
+    })
+}
+
 // If the marker is on the first line, skip it — there's no preceding content
 // so an edit cannot meaningfully "overlap" a marker that starts the file.
 fn is_edit_over_marker(
@@ -565,6 +593,54 @@ mod tests {
 
         let content = std::fs::read_to_string(&file_path)?;
         assert!(content.contains("edited"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_rejects_replacing_only_multiline_opener() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let content =
+            "// rik: [ uppercase this text\nA lone oak stands.\nDreams of spring.\n// ]\n";
+        std::fs::write(&file_path, content)?;
+
+        let tool = make_tool(&file_path);
+        let result = tool
+            .call(EditFileArgs {
+                old_text: "// rik: [ uppercase this text".into(),
+                new_text: "A LONE OAK STANDS.".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must also replace through its closing delimiter")
+        );
+        assert_eq!(std::fs::read_to_string(&file_path)?, content);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edit_allows_replacing_entire_multiline_block() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        let block = "// rik: [ uppercase this text\nA lone oak stands.\nDreams of spring.\n// ]";
+        std::fs::write(&file_path, format!("{block}\nafter\n"))?;
+
+        let tool = make_tool(&file_path);
+        tool.call(EditFileArgs {
+            old_text: block.into(),
+            new_text: "A LONE OAK STANDS.\nDREAMS OF SPRING.".into(),
+        })
+        .await?;
+
+        assert_eq!(
+            std::fs::read_to_string(&file_path)?,
+            "A LONE OAK STANDS.\nDREAMS OF SPRING.\nafter\n"
+        );
         Ok(())
     }
 

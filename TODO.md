@@ -30,9 +30,6 @@
   Run it after edits and print its status and output. Do not feed the result
   back to the model, retry automatically, or widen the editing scope.
 
-## Bugs
-- rik doesn't clean the ending multiline marker (e.g. `// ]]`)
-
 ## Out Of Scope
 
 - Comments-only marker recognition. Rik is intentionally format-agnostic and
