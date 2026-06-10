@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use rig::completion::ToolDefinition;
@@ -23,7 +23,7 @@ pub struct DynamicCommandTool {
 }
 
 impl DynamicCommandTool {
-    fn parse(line: &str, alias: &str, working_dir: &Path) -> Option<Self> {
+    fn parse(line: &str, line_number: usize, alias: &str, working_dir: &Path) -> Option<Self> {
         let start = line.find(&format!("{alias} +tool"))?;
         let rest = line[start + alias.len() + " +tool".len()..].trim_start();
         let (description, command) = if let Some(rest) = rest.strip_prefix('(') {
@@ -33,26 +33,11 @@ impl DynamicCommandTool {
             (None, rest.strip_prefix(':')?.trim())
         };
         let words = shlex::split(command)?;
-        let executable = words.first()?.clone();
-        let name = Path::new(&executable)
-            .file_name()?
-            .to_string_lossy()
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        if name.is_empty() {
-            return None;
-        }
+        words.first()?;
 
         let parts = words.into_iter().map(parse_part).collect();
         Some(Self {
-            name,
+            name: format!("D{line_number}"),
             description: description.unwrap_or_else(|| format!("Run `{command}`.")),
             command: command.to_string(),
             parts,
@@ -205,11 +190,10 @@ impl ToolDyn for DynamicCommandTool {
 pub type DynamicToolsHashMap = HashMap<String, (String, String)>;
 pub type DynamicToolsTuple = (DynamicToolsHashMap, Vec<Box<dyn ToolDyn>>);
 pub fn find_dynamic_tools(content: &str, alias: &str, working_dir: &Path) -> DynamicToolsTuple {
-    let mut names = HashSet::new();
     let tools: Vec<DynamicCommandTool> = content
         .lines()
-        .filter_map(|line| DynamicCommandTool::parse(line, alias, working_dir))
-        .filter(|tool| names.insert(tool.name.clone()))
+        .enumerate()
+        .filter_map(|(index, line)| DynamicCommandTool::parse(line, index + 1, alias, working_dir))
         .collect();
     let toolhash: DynamicToolsHashMap = tools
         .clone()
@@ -232,11 +216,12 @@ mod tests {
     fn parses_fixed_named_and_variadic_arguments() {
         let tool = DynamicCommandTool::parse(
             "rik +tool (read files): cat <PATH> <...>",
+            7,
             "rik",
             Path::new("/tmp"),
         )
         .unwrap();
-        assert_eq!(tool.name, "cat");
+        assert_eq!(tool.name, "D7");
         assert_eq!(tool.description, "read files");
         assert_eq!(
             tool.command_args(&json!({"path": "a.txt", "args": ["b.txt", "-n"]}))
@@ -247,20 +232,21 @@ mod tests {
     }
 
     #[test]
-    fn finds_only_matching_alias_and_deduplicates_names() {
+    fn names_matching_tools_after_their_declaration_lines() {
         let (_, tools) = find_dynamic_tools(
             "rik +tool: cargo test\nother +tool: zig test x\nrik +tool: cargo check",
             "rik",
             Path::new("/tmp"),
         );
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name(), "cargo");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name(), "D1");
+        assert_eq!(tools[1].name(), "D3");
     }
 
     #[tokio::test]
     async fn executes_fixed_command_without_a_shell() {
         let tool =
-            DynamicCommandTool::parse("rik +tool: rustc --version", "rik", Path::new("/tmp"))
+            DynamicCommandTool::parse("rik +tool: rustc --version", 1, "rik", Path::new("/tmp"))
                 .unwrap();
         let output = ToolDyn::call(&tool, "{}".to_string()).await.unwrap();
 
@@ -271,6 +257,7 @@ mod tests {
     async fn returns_stdout_and_stderr_to_the_caller() {
         let tool = DynamicCommandTool::parse(
             "rik +tool: sh -c 'printf stdout; printf stderr >&2'",
+            1,
             "rik",
             Path::new("/tmp"),
         )

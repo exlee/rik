@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Use Escape instead of Space to cancel the current processing loop and report `[user cancel received]`
+- Name dynamic command tools `D<N>` after their declaration line number
 
 ## [0.3.0] - 2026-06-09
 

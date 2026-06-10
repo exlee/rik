@@ -328,10 +328,10 @@ rik +tool (read Go documentation): godoc <QUERY>
 rik +tool (read files with cat): cat <...>
 ```
 
-The command executable becomes the tool name. Fixed arguments are passed unchanged,
-`<NAME>` creates a required lowercase string parameter, and `<...>` creates a
-required `args` string array. Commands run directly from rik's working directory,
-without a shell.
+The tool is named `D<N>`, where `N` is the declaration's 1-based line number.
+Fixed arguments are passed unchanged, `<NAME>` creates a required lowercase string
+parameter, and `<...>` creates a required `args` string array. Commands run directly
+from rik's working directory, without a shell.
 
 Dynamic tools are available only while processing the file that defines them.
 Normal edit tasks can use them automatically. Questions must explicitly opt in with
