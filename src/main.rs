@@ -33,6 +33,10 @@ struct Cli {
     /// Enable personality
     #[arg(long)]
     personality: bool,
+
+    /// Model profile to use (e.g. "openrouter.gpt120")
+    #[arg(long)]
+    model: Option<String>,
 }
 
 #[tokio::main]
@@ -42,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let mut config = config::load()?;
+    let mut config = config::load(cli.model.as_deref())?;
 
     if cli.personality {
         config.personality = true;
@@ -50,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = state::init_for_pattern(&cli.pattern, config)?;
 
-    print_motd(&cli.alias, &state.config);
+    print_motd(&cli.alias, cli.model.as_deref(), &state.config);
     let _ = ctrlc::set_handler(|| {
         cleanup::cleanup();
         std::process::exit(0);
@@ -64,15 +68,50 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn print_motd(alias: &str, config: &config::Config) {
+fn print_motd(alias: &str, profile: Option<&str>, config: &config::Config) {
+    if config.personality {
+        personality::motd_personality();
+    }
+    println!("{}", format_motd(alias, profile, config));
+}
+
+fn format_motd(alias: &str, profile: Option<&str>, config: &config::Config) -> String {
     let motd = include_str!("../MOTD.txt");
     let alias = if alias != "rik" {
         format!(" (call me \"{alias}\")\n")
     } else {
         String::new()
     };
-    if config.personality {
-        personality::motd_personality();
+
+    format!(
+        "{}  {} / {}\n",
+        motd.replace("{ALIAS}", &alias),
+        config.model.provider,
+        config.model.model,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_model_profile_flag() {
+        let cli = Cli::try_parse_from(["rik", "--model", "openrouter.gpt120", "src"]).unwrap();
+
+        assert_eq!(cli.model.as_deref(), Some("openrouter.gpt120"));
+        assert_eq!(cli.pattern, "src");
     }
-    println!("{}", motd.replace("{ALIAS}", &alias));
+
+    #[test]
+    fn motd_includes_current_model_and_selected_profile() {
+        let mut config = config::Config::default();
+        config.model.provider = config::Provider::OpenRouter;
+        config.model.model = "gpt-120:turbo".to_owned();
+
+        let motd = format_motd("rik", Some("openrouter.gpt120"), &config);
+
+        assert!(motd.contains("Model: OpenRouter / gpt-120:turbo"));
+        assert!(motd.contains("Profile: openrouter.gpt120"));
+    }
 }

@@ -209,6 +209,28 @@ model = "gpt-4o"
 #url = "https://api.openai.com/v1"
 ```
 
+For multiple models, define nested profiles and select one with
+`--model <profile>`. Child profiles inherit their parent's settings, while the
+provider must always be set explicitly:
+
+```toml
+# Uses OPENROUTER_API_KEY from the environment.
+[models.openrouter]
+provider = "openrouter"
+
+[models.openrouter.gpt120]
+model = "gpt-120:turbo"
+```
+
+```bash
+rik --model openrouter.gpt120 'src/**/*.rs'
+```
+
+The `openrouter.gpt120` profile inherits `provider = "openrouter"`. Any shared
+`api_key` or `url` set on `[models.openrouter]` would be inherited as well, and
+child settings override parent settings. Named profiles under `[model]`, such
+as `[model.zai]`, are also supported.
+
 ### Supported providers
 
 | Provider | Config value | Env var | Default URL |
