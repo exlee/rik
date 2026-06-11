@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-11
+
+### Added
+- Select nested model profiles with `--model <profile>` or the top-level `default_model`/`default-model` config key, with inherited parent settings
+- Put an instruction after a multi-line opening delimiter or enclose a same-line instruction in matching delimiters
+
 ### Changed
 - Use Escape instead of Space to cancel the current processing loop and report `[user cancel received]`
 - Name dynamic command tools `D<N>` after their declaration line number
+- Return both stdout and stderr from dynamic command tools
+- Avoid returning already-known `read_file` lines until the file changes or an edit resets the task's read history
+- Improve runtime tool-call output and show diffs for each successful `edit_file` call
+
+### Fixed
+- Revert incomplete edits on stream errors instead of continuing marker cleanup
+- Reliably remove complete multi-line marker spans, including decorated closing delimiters
+- Preserve task markers and report an error when the agent makes no substantive edit
 
 ## [0.3.0] - 2026-06-09
 

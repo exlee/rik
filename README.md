@@ -28,6 +28,12 @@ Think of it as leaving sticky notes for an LLM and having someone actually follo
 
 ## News
 
+### rik 0.4.0 adds model profiles and more reliable markers
+
+Select inherited model profiles with `--model` or `default_model`. Delimited
+markers now support inline instructions, and task markers remain in place when
+the agent does not make a substantive edit.
+
 ### rik 0.3.0 can answer questions
 
 End a marker with `?` and rik answers it without editing the file. Questions can also opt into file-defined dynamic tools.
@@ -340,7 +346,7 @@ This would look for `todo: <instruction>` markers instead.
 
 ## Tools
 
-rik gives the agent four file tools during processing:
+rik gives the agent five built-in tools during task processing:
 
 | Tool | Purpose |
 |---|---|
@@ -348,6 +354,7 @@ rik gives the agent four file tools during processing:
 | `edit_file` | Replace exact text in the target file. Requires unique match and resets `read_file` history after a successful edit. |
 | `write_file` | Create new files (refuses to overwrite existing ones). |
 | `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
+| `send_message` | Send a final status message without changing files. |
 
 All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 30 turns before producing final edits.
 
@@ -396,7 +403,7 @@ All markers in a single file are processed in one pass. rik won't stop after fin
 rik is intentionally limited by design:
 
 - **No REPL** -- you mark up files, run rik, review diffs. Repeat.
-- **No arbitrary writes** -- the agent can only edit via `edit_file` which requires exact text matches, and only within the file being processed.
+- **Constrained writes** -- `edit_file` requires exact text matches and can only modify the file being processed; `write_file` can create new files but refuses to overwrite existing ones.
 - **No conversation history** -- each invocation is stateless and independent.
 - **Diff-first feedback** -- every change produces a diff so you see exactly what was modified.
 
