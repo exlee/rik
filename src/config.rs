@@ -142,7 +142,10 @@ pub fn load(model: Option<&str>) -> anyhow::Result<Config> {
 fn parse(contents: &str, model: Option<&str>) -> anyhow::Result<Config> {
     let mut config: toml::Value = toml::from_str(contents)?;
 
-    if let Some(model) = model {
+    let default_model = ["default_model", "default-model"]
+        .into_iter()
+        .find_map(|key| config.get(key).and_then(toml::Value::as_str));
+    if let Some(model) = model.or(default_model) {
         let selected = select_model(&config, model)?;
         config
             .as_table_mut()
@@ -269,6 +272,74 @@ mod tests {
 
         assert_eq!(config.model.provider, Provider::OpenAI);
         assert_eq!(config.model.model, "zai-model");
+    }
+
+    #[test]
+    fn selects_top_level_default_model_profile() {
+        let config = parse(
+            r#"
+                default_model = "openrouter.mercury"
+
+                [model.openrouter]
+                provider = "openrouter"
+
+                [model.openrouter.mercury]
+                model = "mercury"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.model.provider, Provider::OpenRouter);
+        assert_eq!(config.model.model, "mercury");
+    }
+
+    #[test]
+    fn supports_hyphenated_default_model_and_ignores_unselected_model_table() {
+        let config = parse(
+            r#"
+                default-model = "openrouter.mercury"
+
+                [model]
+
+                [model.unselected]
+                model = "missing-provider"
+
+                [model.openrouter]
+                provider = "openrouter"
+
+                [model.openrouter.mercury]
+                model = "mercury"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.model.provider, Provider::OpenRouter);
+        assert_eq!(config.model.model, "mercury");
+    }
+
+    #[test]
+    fn explicit_model_overrides_top_level_default_model() {
+        let config = parse(
+            r#"
+                default_model = "openrouter.mercury"
+
+                [model.openrouter]
+                provider = "openrouter"
+
+                [model.openrouter.mercury]
+                model = "mercury"
+
+                [model.openrouter.fast]
+                model = "fast"
+            "#,
+            Some("openrouter.fast"),
+        )
+        .unwrap();
+
+        assert_eq!(config.model.provider, Provider::OpenRouter);
+        assert_eq!(config.model.model, "fast");
     }
 
     #[test]

@@ -210,26 +210,30 @@ model = "gpt-4o"
 ```
 
 For multiple models, define nested profiles and select one with
-`--model <profile>`. Child profiles inherit their parent's settings, while the
-provider must always be set explicitly:
+`--model <profile>` or the top-level `default_model` key. An explicit
+`--model` takes precedence over `default_model`. Without either, rik uses the
+settings directly under `[model]`. The spelling `default-model` is also
+accepted for compatibility.
 
 ```toml
+default_model = "openrouter.mercury"
+
 # Uses OPENROUTER_API_KEY from the environment.
-[models.openrouter]
+[model.openrouter]
 provider = "openrouter"
 
-[models.openrouter.gpt120]
-model = "gpt-120:turbo"
+[model.openrouter.mercury]
+model = "mercury"
 ```
 
 ```bash
-rik --model openrouter.gpt120 'src/**/*.rs'
+rik --model openrouter.mercury 'src/**/*.rs'
 ```
 
-The `openrouter.gpt120` profile inherits `provider = "openrouter"`. Any shared
-`api_key` or `url` set on `[models.openrouter]` would be inherited as well, and
-child settings override parent settings. Named profiles under `[model]`, such
-as `[model.zai]`, are also supported.
+The `openrouter.mercury` profile inherits `provider = "openrouter"`. Any shared
+`api_key` or `url` set on `[model.openrouter]` would be inherited as well, and
+child settings override parent settings. Profiles under the legacy `[models]`
+table are also supported.
 
 ### Supported providers
 

@@ -75,7 +75,7 @@ fn print_motd(alias: &str, profile: Option<&str>, config: &config::Config) {
     println!("{}", format_motd(alias, profile, config));
 }
 
-fn format_motd(alias: &str, profile: Option<&str>, config: &config::Config) -> String {
+fn format_motd(alias: &str, _profile: Option<&str>, config: &config::Config) -> String {
     let motd = include_str!("../MOTD.txt");
     let alias = if alias != "rik" {
         format!(" (call me \"{alias}\")\n")
@@ -104,14 +104,13 @@ mod tests {
     }
 
     #[test]
-    fn motd_includes_current_model_and_selected_profile() {
+    fn motd_includes_current_model() {
         let mut config = config::Config::default();
         config.model.provider = config::Provider::OpenRouter;
         config.model.model = "gpt-120:turbo".to_owned();
 
         let motd = format_motd("rik", Some("openrouter.gpt120"), &config);
 
-        assert!(motd.contains("Model: OpenRouter / gpt-120:turbo"));
-        assert!(motd.contains("Profile: openrouter.gpt120"));
+        assert!(motd.contains("OpenRouter / gpt-120:turbo"));
     }
 }
