@@ -227,6 +227,8 @@ Rules:
 - If you are unsure about conventions, read nearby files for reference.
 - You may make MULTIPLE edit_file calls if the change requires touching more \
   than one spot (e.g. adding an import AND inserting code).
+- A task is incomplete until you make a substantive edit to the target file. \
+  Reading context and returning a summary without editing is not completion.
 - Each edit_file call must have a unique old_text match.
 - Do NOT add comments explaining what you did. Just make the edit.
 - Do NOT echo back the file contents. The edit_file call IS your output.
@@ -396,6 +398,23 @@ fn remove_marker(
     std::fs::write(file_path, &new_content)
         .with_context(|| format!("Failed to write cleaned file: {}", file_path.display()))?;
 
+    Ok(true)
+}
+
+/// Clean up a completed marker only after the agent changed the target file.
+fn remove_marker_after_change(
+    file_path: &std::path::Path,
+    alias: &str,
+    completed: &crate::markers::FoundMarker,
+    content_before: &str,
+) -> anyhow::Result<bool> {
+    let content_after = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to verify edit: {}", file_path.display()))?;
+    if content_after == content_before {
+        return Ok(false);
+    }
+
+    remove_marker(file_path, alias, completed)?;
     Ok(true)
 }
 
@@ -792,7 +811,14 @@ where
         }
     }
 
-    remove_marker(file_path, alias, &task_marker)?;
+    if !remove_marker_after_change(file_path, alias, &task_marker, &content_before)? {
+        _reverter.mark_success();
+        anyhow::bail!(
+            "Task marker at {}:{} was left unchanged because the agent made no edit",
+            file_path.display(),
+            task_marker.start_line,
+        );
+    }
 
     // Show diff if the file changed.
     let content_after = std::fs::read_to_string(file_path)
@@ -1045,6 +1071,36 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&file)?,
             "rik: why?\nrik: second task\ncontent\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_task_is_not_cleaned_up() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        let before = "before\nrik: implement this\nafter\n";
+        std::fs::write(&file, before)?;
+        let marker = crate::markers::find_markers(before, "rik").remove(0);
+
+        assert!(!remove_marker_after_change(&file, "rik", &marker, before)?);
+        assert_eq!(std::fs::read_to_string(&file)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn changed_task_is_cleaned_up() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        let before = "before\nrik: implement this\nafter\n";
+        std::fs::write(&file, before)?;
+        let marker = crate::markers::find_markers(before, "rik").remove(0);
+        std::fs::write(&file, "before\nrik: implement this\nimplemented\nafter\n")?;
+
+        assert!(remove_marker_after_change(&file, "rik", &marker, before)?);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\nimplemented\nafter\n"
         );
         Ok(())
     }
