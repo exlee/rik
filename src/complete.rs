@@ -350,6 +350,10 @@ where
 }
 
 /// Remove one completed marker while leaving every other marker untouched.
+///
+/// For multiline markers, remove only the opening and closing delimiter lines.
+/// The agent may have edited the enclosed content without replacing the whole
+/// span, so deleting the interior here would discard a successful edit.
 fn remove_marker(
     file_path: &std::path::Path,
     alias: &str,
@@ -385,7 +389,11 @@ fn remove_marker(
         .enumerate()
         .filter(|(idx, _)| {
             let line = idx + 1;
-            line < marker.start_line || line > marker.end_line
+            if marker.start_line == marker.end_line {
+                line != marker.start_line
+            } else {
+                line != marker.start_line && line != marker.end_line
+            }
         })
         .map(|(_, line)| *line)
         .collect();
@@ -1106,19 +1114,35 @@ mod tests {
     }
 
     #[test]
-    fn completed_marker_cleanup_removes_decorated_multiline_closer() -> anyhow::Result<()> {
+    fn changed_multiline_task_cleanup_preserves_edited_body() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        let before = "before\nrik: ( uppercase this\nbody\n)\nafter\n";
+        std::fs::write(&file, before)?;
+        let marker = crate::markers::find_markers(before, "rik").remove(0);
+        std::fs::write(&file, "before\nrik: ( uppercase this\nBODY\n)\nafter\n")?;
+
+        assert!(remove_marker_after_change(&file, "rik", &marker, before)?);
+        assert_eq!(std::fs::read_to_string(&file)?, "before\nBODY\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_preserves_body_with_decorated_multiline_closer()
+    -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let file = dir.path().join("markers.rs");
         std::fs::write(&file, "before\n// rik: [[\nwork\n// ]]\nafter\n")?;
         let markers = crate::markers::find_markers(&std::fs::read_to_string(&file)?, "rik");
 
         assert!(remove_marker(&file, "rik", &markers[0])?);
-        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        assert_eq!(std::fs::read_to_string(&file)?, "before\nwork\nafter\n");
         Ok(())
     }
 
     #[test]
-    fn completed_marker_cleanup_removes_inline_instruction_multiline_block() -> anyhow::Result<()> {
+    fn completed_marker_cleanup_preserves_inline_instruction_multiline_body() -> anyhow::Result<()>
+    {
         let dir = tempfile::tempdir()?;
         let file = dir.path().join("markers.txt");
         std::fs::write(
@@ -1129,12 +1153,16 @@ mod tests {
 
         assert_eq!(markers[0].query, "uppercase this\nand entertain ourselves.");
         assert!(remove_marker(&file, "rik", &markers[0])?);
-        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\nand entertain ourselves.\nafter\n"
+        );
         Ok(())
     }
 
     #[test]
-    fn completed_marker_cleanup_removes_inline_block_after_body_was_edited() -> anyhow::Result<()> {
+    fn completed_marker_cleanup_preserves_inline_block_after_body_was_edited() -> anyhow::Result<()>
+    {
         let dir = tempfile::tempdir()?;
         let file = dir.path().join("markers.txt");
         let before = "before\nrik: ( uppercase this\nand entertain ourselves.\n)\nafter\n";
@@ -1147,12 +1175,15 @@ mod tests {
         )?;
 
         assert!(remove_marker(&file, "rik", &completed)?);
-        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\nAND ENTERTAIN OURSELVES.\nafter\n"
+        );
         Ok(())
     }
 
     #[test]
-    fn completed_marker_cleanup_removes_inline_block_after_body_grows() -> anyhow::Result<()> {
+    fn completed_marker_cleanup_preserves_inline_block_after_body_grows() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let file = dir.path().join("markers.txt");
         let before = "before\nrik: ( uppercase this\nand entertain ourselves.\n)\nafter\n";
@@ -1165,7 +1196,10 @@ mod tests {
         )?;
 
         assert!(remove_marker(&file, "rik", &completed)?);
-        assert_eq!(std::fs::read_to_string(&file)?, "before\nafter\n");
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\nAND ENTERTAIN\nOURSELVES.\nafter\n"
+        );
         Ok(())
     }
 
@@ -1185,7 +1219,7 @@ mod tests {
         assert!(remove_marker(&file, "rik", &completed)?);
         assert_eq!(
             std::fs::read_to_string(&file)?,
-            "before\nmiddle\nrik: later task\nafter\n"
+            "before\nEDITED\nBODY\nmiddle\nrik: later task\nafter\n"
         );
         Ok(())
     }
