@@ -39,6 +39,7 @@ struct ProcessingOptions<'a> {
     diff_tool: Option<&'a Vec<String>>,
     verbose: bool,
     personality: bool,
+    system_prompt: Option<&'a str>,
 }
 
 impl MarkerOutput {
@@ -80,6 +81,7 @@ macro_rules! define_provider_dispatch {
             pattern: &str,
             verbose: bool,
             personality: bool,
+            system_prompt: Option<&str>,
         ) -> anyhow::Result<ScanOutcome> {
             match cfg.provider {
                 $(
@@ -96,6 +98,7 @@ macro_rules! define_provider_dispatch {
                                 diff_tool,
                                 verbose,
                                 personality,
+                                system_prompt,
                             },
                         ).await
                     }
@@ -202,8 +205,19 @@ fn surrounding_lines(content: &str, center_line: usize, radius: usize) -> String
 }
 
 /// Preamble injected into the agent for file-completion mode.
-fn make_preamble(alias: &str, tool_inject: &str) -> String {
-    format!("\
+fn append_system_prompt(mut preamble: String, system_prompt: Option<&str>) -> String {
+    if let Some(system_prompt) = system_prompt {
+        preamble.push_str(
+            "\n\nAdditional overarching instructions. Follow them where they do not conflict \
+             with Rik's operational rules above:\n",
+        );
+        preamble.push_str(system_prompt);
+    }
+    preamble
+}
+
+fn make_preamble(alias: &str, tool_inject: &str, system_prompt: Option<&str>) -> String {
+    append_system_prompt(format!("\
 You are an in-place editor. A file contains '{alias}: <instruction>' markers that \
 must be replaced with real content. The file is a working document (code, prose, \
 config, etc.) and your edits must keep it coherent and correct.
@@ -233,7 +247,9 @@ Rules:
 - Do NOT add comments explaining what you did. Just make the edit.
 - Do NOT echo back the file contents. The edit_file call IS your output.
 - After editing, provide a SHORT summary of what you changed (under 250 characters). \
-  A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.")
+  A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description."),
+        system_prompt,
+    )
 }
 
 fn is_question_marker(marker: &crate::markers::FoundMarker) -> bool {
@@ -272,12 +288,15 @@ fn marker_replacement_instruction(marker: &crate::markers::FoundMarker) -> Strin
     }
 }
 
-fn make_question_preamble(alias: &str) -> String {
-    format!(
-        "You answer questions written in '{alias}:' file markers. This is a strictly read-only \
+fn make_question_preamble(alias: &str, system_prompt: Option<&str>) -> String {
+    append_system_prompt(
+        format!(
+            "You answer questions written in '{alias}:' file markers. This is a strictly read-only \
          mode: you have no tools that modify files. Read files only when needed for context. \
          Answer the questions directly and concisely. Do not describe your process, mention \
          tools, add personality, or propose edits."
+        ),
+        system_prompt,
     )
 }
 
@@ -289,6 +308,7 @@ async fn answer_questions<C>(
     file_path: &std::path::Path,
     content: &str,
     question_marker: &crate::markers::FoundMarker,
+    system_prompt: Option<&str>,
 ) -> anyhow::Result<bool>
 where
     C: CompletionClient,
@@ -306,7 +326,7 @@ where
 
     let mut agent_builder = comp_client
         .agent(model_name)
-        .preamble(&make_question_preamble(alias))
+        .preamble(&make_question_preamble(alias, system_prompt))
         .tool(tools::ReadFileTool::default())
         .tool(tools::ListFilesTool::default())
         .default_max_turns(30);
@@ -473,6 +493,7 @@ where
         diff_tool,
         verbose,
         personality,
+        system_prompt,
     } = options;
     let content_before = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
@@ -513,6 +534,7 @@ where
             file_path,
             &content_before,
             &task_marker,
+            system_prompt,
         )
         .await?;
         return Ok(ScanOutcome {
@@ -588,7 +610,7 @@ where
         context_section,
     );
 
-    let preamble = make_preamble(alias, &tool_inject);
+    let preamble = make_preamble(alias, &tool_inject, system_prompt);
     let read_history = std::sync::Arc::new(tools::ReadFileHistory::default());
     let agent_builder = comp_client
         .agent(model_name)
@@ -900,6 +922,7 @@ pub async fn cmd_complete(
     alias: &str,
     pattern: String,
     verbose: bool,
+    system_prompt: Option<&str>,
 ) -> anyhow::Result<()> {
     let config = &app_state.config;
     let diff_tool = config.diff_tool.as_ref();
@@ -911,6 +934,7 @@ pub async fn cmd_complete(
         &pattern,
         verbose,
         config.personality,
+        system_prompt,
     )
     .await?;
 
@@ -974,6 +998,26 @@ mod tests {
             "old_text not found"
         );
         assert_eq!(display_tool_error("plain error"), "plain error");
+    }
+
+    #[test]
+    fn system_prompt_is_appended_to_task_and_question_preambles() {
+        let instruction = "Make every response a joke.";
+
+        let task = make_preamble("rik", "", Some(instruction));
+        let question = make_question_preamble("rik", Some(instruction));
+
+        assert!(task.ends_with(instruction));
+        assert!(question.ends_with(instruction));
+    }
+
+    #[test]
+    fn absent_system_prompt_does_not_add_overarching_instructions() {
+        let task = make_preamble("rik", "", None);
+        let question = make_question_preamble("rik", None);
+
+        assert!(!task.contains("Additional overarching instructions"));
+        assert!(!question.contains("Additional overarching instructions"));
     }
 
     #[test]
@@ -1320,6 +1364,7 @@ pub async fn cmd_watch(
     alias: &str,
     pattern: String,
     verbose: bool,
+    system_prompt: Option<&str>,
 ) -> anyhow::Result<()> {
     use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
     use std::sync::mpsc;
@@ -1348,6 +1393,7 @@ pub async fn cmd_watch(
         &pattern,
         verbose,
         config.personality,
+        system_prompt,
     )
     .await;
     let mut prev_hashes = snapshot_hashes(app_state, &pattern);
@@ -1379,6 +1425,7 @@ pub async fn cmd_watch(
                     &pattern,
                     verbose,
                     config.personality,
+                    system_prompt,
                 )
                 .await
                 {

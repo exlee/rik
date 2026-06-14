@@ -37,6 +37,10 @@ struct Cli {
     /// Model profile to use (e.g. "openrouter.gpt120")
     #[arg(long)]
     model: Option<String>,
+
+    /// Additional overarching instructions for the agent
+    #[arg(short = 's', long)]
+    system_prompt: Option<String>,
 }
 
 #[tokio::main]
@@ -62,9 +66,23 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.watch {
         crate::keyboard::start_escape_listener();
-        complete::cmd_watch(state, &cli.alias, cli.pattern, cli.verbose).await
+        complete::cmd_watch(
+            state,
+            &cli.alias,
+            cli.pattern,
+            cli.verbose,
+            cli.system_prompt.as_deref(),
+        )
+        .await
     } else {
-        complete::cmd_complete(state, &cli.alias, cli.pattern, cli.verbose).await
+        complete::cmd_complete(
+            state,
+            &cli.alias,
+            cli.pattern,
+            cli.verbose,
+            cli.system_prompt.as_deref(),
+        )
+        .await
     }
 }
 
@@ -101,6 +119,25 @@ mod tests {
 
         assert_eq!(cli.model.as_deref(), Some("openrouter.gpt120"));
         assert_eq!(cli.pattern, "src");
+    }
+
+    #[test]
+    fn parses_system_prompt_flags() {
+        let long =
+            Cli::try_parse_from(["rik", "--system-prompt", "Respond in jokes", "src"]).unwrap();
+        let short = Cli::try_parse_from(["rik", "-s", "Write Rust tests", "src"]).unwrap();
+
+        assert_eq!(long.system_prompt.as_deref(), Some("Respond in jokes"));
+        assert_eq!(short.system_prompt.as_deref(), Some("Write Rust tests"));
+    }
+
+    #[test]
+    fn help_lists_system_prompt_flag() {
+        use clap::CommandFactory as _;
+
+        let help = Cli::command().render_help().to_string();
+
+        assert!(help.contains("-s, --system-prompt <SYSTEM_PROMPT>"));
     }
 
     #[test]

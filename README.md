@@ -344,6 +344,18 @@ rik -a todo 'src/**/*.rs'
 
 This would look for `todo: <instruction>` markers instead.
 
+### System prompt
+
+Give every edit task and question an additional overarching instruction:
+
+```bash
+rik -s 'Make sure all responses are in joke form' 'src/**/*.rs'
+rik --system-prompt 'Your job is to write test corpus files in Rust' 'tests/**/*'
+```
+
+The system prompt applies for the entire run, including watch mode. Rik's built-in
+operational rules still take precedence.
+
 ## Tools
 
 rik gives the agent five built-in tools during task processing:
