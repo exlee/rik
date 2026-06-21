@@ -1,5 +1,5 @@
 use anyhow::Context;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::fmt;
 
 /// Supported LLM providers.
@@ -44,24 +44,29 @@ impl fmt::Display for Provider {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub struct Config {
     pub model: ModelConfig,
     /// Diff command as a list of arguments. Use "$pre" and "$post" as
     /// placeholders for the pre/post change temp file paths.
     /// Example: ["difft", "--color", "always", "$pre", "$post"]
     /// When unset, auto-detects difft, delta, or diff.
-    #[serde(default)]
     pub diff_tool: Option<Vec<String>>,
     /// Enable personality mode. When enabled, Rik will be more chatty about his work.
-    #[serde(default)]
     pub personality: bool,
-    #[serde(default = "bool_true")]
-    pub marker_limits_edition_range: bool,
+    /// Internal edit boundary policy.
+    pub edition_constraints: EditionConstraints,
 }
 
-pub fn bool_true() -> bool {
-    true
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditionConstraints {
+    /// Allow edits anywhere in the target file.
+    None,
+    /// Enforce marker vicinity before each edit_file call.
+    VicinityBefore,
+    /// Let the model edit freely, then keep only marker-vicinity chunks.
+    VicinityAfter,
 }
 
 impl Default for Config {
@@ -70,8 +75,43 @@ impl Default for Config {
             model: ModelConfig::default(),
             diff_tool: None,
             personality: false,
-            marker_limits_edition_range: true,
+            edition_constraints: EditionConstraints::VicinityAfter,
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct RawConfig {
+    pub model: ModelConfig,
+    #[serde(default)]
+    pub diff_tool: Option<Vec<String>>,
+    #[serde(default)]
+    pub personality: bool,
+    #[serde(default, rename = "edition-constraints", alias = "edition_constraints")]
+    pub edition_constraints: Option<EditionConstraints>,
+    #[serde(default)]
+    pub marker_limits_edition_range: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawConfig::deserialize(deserializer)?;
+        let edition_constraints = raw.edition_constraints.unwrap_or_else(|| {
+            if raw.marker_limits_edition_range.unwrap_or(true) {
+                EditionConstraints::VicinityAfter
+            } else {
+                EditionConstraints::None
+            }
+        });
+        Ok(Self {
+            model: raw.model,
+            diff_tool: raw.diff_tool,
+            personality: raw.personality,
+            edition_constraints,
+        })
     }
 }
 
@@ -215,6 +255,76 @@ mod tests {
         assert_eq!(config.model.provider, Provider::Anthropic);
         assert_eq!(config.model.model, "claude");
         assert!(config.personality);
+        assert_eq!(
+            config.edition_constraints,
+            EditionConstraints::VicinityAfter
+        );
+    }
+
+    #[test]
+    fn default_edition_constraints_are_vicinity_after() {
+        assert_eq!(
+            Config::default().edition_constraints,
+            EditionConstraints::VicinityAfter
+        );
+    }
+
+    #[test]
+    fn parses_internal_edition_constraints() {
+        let config = parse(
+            r#"
+                edition-constraints = "vicinity-after"
+
+                [model]
+                provider = "openai"
+                model = "gpt"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.edition_constraints,
+            EditionConstraints::VicinityAfter
+        );
+    }
+
+    #[test]
+    fn legacy_marker_limit_false_maps_to_no_constraints() {
+        let config = parse(
+            r#"
+                marker_limits_edition_range = false
+
+                [model]
+                provider = "openai"
+                model = "gpt"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.edition_constraints, EditionConstraints::None);
+    }
+
+    #[test]
+    fn explicit_edition_constraints_override_legacy_marker_limit() {
+        let config = parse(
+            r#"
+                marker_limits_edition_range = false
+                edition-constraints = "vicinity-before"
+
+                [model]
+                provider = "openai"
+                model = "gpt"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.edition_constraints,
+            EditionConstraints::VicinityBefore
+        );
     }
 
     #[test]

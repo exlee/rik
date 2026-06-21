@@ -7,7 +7,7 @@ use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPro
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::config::{ModelConfig, Provider};
+use crate::config::{EditionConstraints, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
 use crate::state::AppState;
@@ -275,16 +275,35 @@ fn question_text(marker: &crate::markers::FoundMarker) -> String {
         .join(" ")
 }
 
-fn marker_replacement_instruction(marker: &crate::markers::FoundMarker) -> String {
-    if marker.start_line < marker.end_line {
+fn marker_replacement_instruction(
+    marker: &crate::markers::FoundMarker,
+    edition_constraints: EditionConstraints,
+) -> String {
+    if edition_constraints == EditionConstraints::VicinityBefore {
+        if marker.start_line < marker.end_line {
+            format!(
+                "Replace the entire multiline marker span from line {} through line {}, including \
+                 the opening marker, enclosed text, and closing delimiter. Do not replace only the \
+                 opening marker line.",
+                marker.start_line, marker.end_line
+            )
+        } else {
+            format!("Replace the task marker on line {}.", marker.start_line)
+        }
+    } else if marker.start_line < marker.end_line {
         format!(
-            "Replace the entire multiline marker span from line {} through line {}, including \
-             the opening marker, enclosed text, and closing delimiter. Do not replace only the \
-             opening marker line.",
+            "The multiline marker spans lines {}-{} and anchors the requested edit. \
+             Edit the target code directly; you may update the enclosed body or replace the full \
+             marker span when that is the clearest change.",
             marker.start_line, marker.end_line
         )
     } else {
-        format!("Replace the task marker on line {}.", marker.start_line)
+        format!(
+            "The task marker on line {} anchors the requested edit. \
+             Edit the target code directly, including nearby existing lines when the task asks for \
+             a modification; do not treat the marker as the only insertion point.",
+            marker.start_line
+        )
     }
 }
 
@@ -446,6 +465,166 @@ fn remove_marker_after_change(
     Ok(true)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChangedBlock {
+    old_start: usize,
+    old_end: usize,
+    new_start: usize,
+    new_end: usize,
+}
+
+fn line_chunks(content: &str) -> Vec<&str> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    content.split_inclusive('\n').collect()
+}
+
+fn changed_blocks(original: &str, produced: &str) -> Vec<ChangedBlock> {
+    let old_lines = line_chunks(original);
+    let new_lines = line_chunks(produced);
+    if old_lines == new_lines {
+        return Vec::new();
+    }
+
+    if old_lines.len().saturating_mul(new_lines.len()) > 4_000_000 {
+        return vec![ChangedBlock {
+            old_start: 0,
+            old_end: old_lines.len(),
+            new_start: 0,
+            new_end: new_lines.len(),
+        }];
+    }
+
+    let width = new_lines.len() + 1;
+    let mut lcs = vec![0usize; (old_lines.len() + 1) * width];
+    for old_idx in (0..old_lines.len()).rev() {
+        for new_idx in (0..new_lines.len()).rev() {
+            let pos = old_idx * width + new_idx;
+            lcs[pos] = if old_lines[old_idx] == new_lines[new_idx] {
+                lcs[(old_idx + 1) * width + new_idx + 1] + 1
+            } else {
+                lcs[(old_idx + 1) * width + new_idx].max(lcs[old_idx * width + new_idx + 1])
+            };
+        }
+    }
+
+    let mut blocks = Vec::new();
+    let mut old_idx = 0;
+    let mut new_idx = 0;
+    let mut current: Option<ChangedBlock> = None;
+    while old_idx < old_lines.len() || new_idx < new_lines.len() {
+        if old_idx < old_lines.len()
+            && new_idx < new_lines.len()
+            && old_lines[old_idx] == new_lines[new_idx]
+        {
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+            old_idx += 1;
+            new_idx += 1;
+        } else {
+            let block = current.get_or_insert(ChangedBlock {
+                old_start: old_idx,
+                old_end: old_idx,
+                new_start: new_idx,
+                new_end: new_idx,
+            });
+            if new_idx == new_lines.len()
+                || (old_idx < old_lines.len()
+                    && lcs[(old_idx + 1) * width + new_idx] >= lcs[old_idx * width + new_idx + 1])
+            {
+                old_idx += 1;
+                block.old_end = old_idx;
+            } else {
+                new_idx += 1;
+                block.new_end = new_idx;
+            }
+        }
+    }
+    if let Some(block) = current {
+        blocks.push(block);
+    }
+    blocks
+}
+
+fn line_range_touches_marker_vicinity(
+    start: usize,
+    end: usize,
+    marker_spans: &[(usize, usize)],
+) -> bool {
+    if marker_spans.is_empty() {
+        return true;
+    }
+    let start_line = start + 1;
+    let end_line = end.max(start + 1);
+    marker_spans.iter().any(|&(marker_start, marker_end)| {
+        let vicinity_start = marker_start.saturating_sub(tools::edit_file::MARKER_RADIUS);
+        let vicinity_end = marker_end + tools::edit_file::MARKER_RADIUS;
+        start_line <= vicinity_end && end_line >= vicinity_start
+    })
+}
+
+fn insertion_touches_marker(block: &ChangedBlock, marker_spans: &[(usize, usize)]) -> bool {
+    if block.old_start != block.old_end || block.new_start == block.new_end {
+        return false;
+    }
+
+    let insertion_line = block.old_start + 1;
+    marker_spans.iter().any(|&(marker_start, marker_end)| {
+        insertion_line >= marker_start && insertion_line <= marker_end + 1
+    })
+}
+
+fn block_allowed(block: &ChangedBlock, marker_spans: &[(usize, usize)]) -> bool {
+    if insertion_touches_marker(block, marker_spans) {
+        return false;
+    }
+
+    line_range_touches_marker_vicinity(block.old_start, block.old_end, marker_spans)
+        || line_range_touches_marker_vicinity(block.new_start, block.new_end, marker_spans)
+}
+
+fn apply_vicinity_after_constraints(
+    file_path: &std::path::Path,
+    alias: &str,
+    original: &str,
+) -> anyhow::Result<usize> {
+    let produced = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
+    let blocks = changed_blocks(original, &produced);
+    if blocks.is_empty() {
+        return Ok(0);
+    }
+
+    let marker_spans = tools::edit_file::editable_marker_spans(original, alias);
+    let rejected = blocks
+        .iter()
+        .filter(|block| !block_allowed(block, &marker_spans))
+        .count();
+    if rejected == 0 {
+        return Ok(0);
+    }
+
+    let old_lines = line_chunks(original);
+    let new_lines = line_chunks(&produced);
+    let mut reconciled = String::new();
+    let mut old_cursor = 0;
+    for block in blocks {
+        reconciled.push_str(&old_lines[old_cursor..block.old_start].concat());
+        if block_allowed(&block, &marker_spans) {
+            reconciled.push_str(&new_lines[block.new_start..block.new_end].concat());
+        } else {
+            reconciled.push_str(&old_lines[block.old_start..block.old_end].concat());
+        }
+        old_cursor = block.old_end;
+    }
+    reconciled.push_str(&old_lines[old_cursor..].concat());
+    std::fs::write(file_path, reconciled)
+        .with_context(|| format!("Failed to write reconciled file: {}", file_path.display()))?;
+    Ok(rejected)
+}
+
 fn remove_context_markers(file_path: &std::path::Path, alias: &str) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read for cleanup: {}", file_path.display()))?;
@@ -571,7 +750,7 @@ where
         task_marker.start_line,
         task_marker.end_line,
         task_marker.query,
-        marker_replacement_instruction(&task_marker),
+        marker_replacement_instruction(&task_marker, app_state.config.edition_constraints),
         surrounding_lines(&content_before, task_marker.start_line, 5),
     );
 
@@ -807,6 +986,8 @@ where
                     let result = tool_result_text(&tool_result);
                     if result.starts_with("[edit_file]") {
                         if output.tool_calls
+                            && app_state.config.edition_constraints
+                                != EditionConstraints::VicinityAfter
                             && let Some(cmd) = resolve_diff_tool(diff_tool)
                         {
                             println!("--- diff ({path}) ---");
@@ -838,6 +1019,13 @@ where
                 return Ok(ScanOutcome::default());
             }
             _ => {}
+        }
+    }
+
+    if app_state.config.edition_constraints == EditionConstraints::VicinityAfter {
+        let rejected = apply_vicinity_after_constraints(file_path, alias, &content_before)?;
+        if rejected > 0 {
+            println!("[{alias}]: edition-constraints restored {rejected} stray change(s).");
         }
     }
 
@@ -1088,11 +1276,23 @@ mod tests {
         assert_eq!(marker.start_line, 1);
         assert_eq!(marker.end_line, 3);
         assert_eq!(
-            marker_replacement_instruction(&marker),
+            marker_replacement_instruction(&marker, EditionConstraints::VicinityBefore),
             "Replace the entire multiline marker span from line 1 through line 3, including the \
              opening marker, enclosed text, and closing delimiter. Do not replace only the \
              opening marker line."
         );
+    }
+
+    #[test]
+    fn default_marker_instruction_anchors_without_forcing_insertion() {
+        let marker = crate::markers::find_markers("let x = 1;\nrik: make x two", "rik").remove(0);
+
+        let instruction =
+            marker_replacement_instruction(&marker, EditionConstraints::VicinityAfter);
+
+        assert!(instruction.contains("anchors the requested edit"));
+        assert!(instruction.contains("Edit the target code directly"));
+        assert!(instruction.contains("do not treat the marker as the only insertion point"));
     }
 
     #[test]
@@ -1283,6 +1483,156 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&file)?,
             "before\nrik: replacement task\nafter\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn vicinity_after_restores_stray_change_and_keeps_marker_change() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = concat!(
+            "stray original\n",
+            "line 2\n",
+            "line 3\n",
+            "line 4\n",
+            "line 5\n",
+            "line 6\n",
+            "line 7\n",
+            "line 8\n",
+            "line 9\n",
+            "line 10\n",
+            "rik: task\n",
+            "near original\n",
+        );
+        std::fs::write(&file, before)?;
+        std::fs::write(
+            &file,
+            concat!(
+                "stray changed\n",
+                "line 2\n",
+                "line 3\n",
+                "line 4\n",
+                "line 5\n",
+                "line 6\n",
+                "line 7\n",
+                "line 8\n",
+                "line 9\n",
+                "line 10\n",
+                "rik: task\n",
+                "near changed\n",
+            ),
+        )?;
+
+        let rejected = apply_vicinity_after_constraints(&file, "rik", before)?;
+
+        assert_eq!(rejected, 1);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            concat!(
+                "stray original\n",
+                "line 2\n",
+                "line 3\n",
+                "line 4\n",
+                "line 5\n",
+                "line 6\n",
+                "line 7\n",
+                "line 8\n",
+                "line 9\n",
+                "line 10\n",
+                "rik: task\n",
+                "near changed\n",
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn vicinity_after_keeps_replacing_marker_with_content() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = "before\nrik: task\nafter\n";
+        std::fs::write(&file, before)?;
+        std::fs::write(&file, "before\ninserted\nafter\n")?;
+
+        let rejected = apply_vicinity_after_constraints(&file, "rik", before)?;
+
+        assert_eq!(rejected, 0);
+        assert_eq!(std::fs::read_to_string(&file)?, "before\ninserted\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn vicinity_after_restores_insertion_that_only_appends_at_marker() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = "before\nrik: task\nafter\n";
+        std::fs::write(&file, before)?;
+        std::fs::write(&file, "before\nrik: task\ninserted\nafter\n")?;
+
+        let rejected = apply_vicinity_after_constraints(&file, "rik", before)?;
+
+        assert_eq!(rejected, 1);
+        assert_eq!(std::fs::read_to_string(&file)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn vicinity_after_keeps_previous_line_modification_near_marker() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        let before = concat!(
+            "stray original\n",
+            "line 2\n",
+            "line 3\n",
+            "line 4\n",
+            "line 5\n",
+            "line 6\n",
+            "line 7\n",
+            "line 8\n",
+            "line 9\n",
+            "previous original\n",
+            "rik: task\n",
+            "after\n",
+        );
+        std::fs::write(&file, before)?;
+        std::fs::write(
+            &file,
+            concat!(
+                "stray changed\n",
+                "line 2\n",
+                "line 3\n",
+                "line 4\n",
+                "line 5\n",
+                "line 6\n",
+                "line 7\n",
+                "line 8\n",
+                "line 9\n",
+                "previous changed\n",
+                "rik: task\n",
+                "after\n",
+            ),
+        )?;
+
+        let rejected = apply_vicinity_after_constraints(&file, "rik", before)?;
+
+        assert_eq!(rejected, 1);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            concat!(
+                "stray original\n",
+                "line 2\n",
+                "line 3\n",
+                "line 4\n",
+                "line 5\n",
+                "line 6\n",
+                "line 7\n",
+                "line 8\n",
+                "line 9\n",
+                "previous changed\n",
+                "rik: task\n",
+                "after\n",
+            )
         );
         Ok(())
     }

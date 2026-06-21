@@ -204,8 +204,11 @@ diff_tool = ["difft", "--color", "always", "$pre", "$post"]
 # Optional: print extra personality around edit tasks.
 personality = false
 
-# Keep edits within a single marker's region (recommended default).
-marker_limits_edition_range = true
+# Internal: edit boundary policy.
+# none = allow edits anywhere in the target file
+# vicinity-before = reject each edit_file call outside the marker vicinity
+# vicinity-after = let the model edit freely, then restore stray chunks afterward (default)
+edition-constraints = "vicinity-after"
 
 [model]
 provider = "openai"

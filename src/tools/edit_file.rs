@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::config::EditionConstraints;
 use crate::markers::MarkerKind;
 use crate::tools::ReadFileHistory;
 
@@ -12,7 +13,7 @@ use crate::tools::ReadFileHistory;
 // ---------------------------------------------------------------------------
 
 /// Radius (in lines) around a marker span within which edits are allowed.
-const MARKER_RADIUS: usize = 7;
+pub(crate) const MARKER_RADIUS: usize = 15;
 
 /// Arguments for the edit_file tool.
 #[derive(Deserialize)]
@@ -39,9 +40,9 @@ impl From<std::io::Error> for EditFileError {
 /// Finds `old_text` and replaces it with `new_text`. The `old_text` must match
 /// exactly one occurrence.
 ///
-/// Two restrictions are enforced at the code level:
+/// Two restrictions may be enforced at the code level:
 /// - **File scope**: the tool always edits `target_path` — no argument needed.
-/// - **Line scope**: the edit must fall within `MARKER_RADIUS` lines of a
+/// - **Line scope**: in `vicinity-before`, the edit must fall within `MARKER_RADIUS` lines of a
 ///   marker span. Marker positions are re-read from disk on every call so they
 ///   stay correct even after earlier edits shift line numbers.
 #[derive(Deserialize, Serialize)]
@@ -68,10 +69,14 @@ impl Tool for EditFileTool<'_> {
             "Edit {} by replacing exact text. \
              old_text must match exactly one occurrence in the file. \
              That text is replaced with new_text. \
-             Only this file may be edited and edits must be within {} lines of a marker.",
-            self.target_path, MARKER_RADIUS,
+             Only this file may be edited.",
+            self.target_path,
         );
-        if self.app_state.config.marker_limits_edition_range {
+        if self.app_state.config.edition_constraints == EditionConstraints::VicinityBefore {
+            desc.push_str(&format!(
+                " Edits must be within {} lines of a marker.",
+                MARKER_RADIUS
+            ));
             desc.push_str(" When multiple markers are present, the edit span has to end before the next marker.");
         }
         ToolDefinition {
@@ -105,16 +110,7 @@ impl Tool for EditFileTool<'_> {
 
         let content = std::fs::read_to_string(&path)?;
 
-        // Re-scan markers from current file content so positions are always fresh.
-        // Only task markers count as edit anchors; context markers do not.
-        let marker_spans: Vec<(usize, usize)> = crate::markers::find_markers(&content, &self.alias)
-            .iter()
-            .filter(|marker| {
-                marker.kind == MarkerKind::Task
-                    && !crate::markers::is_stopped(&content, &self.alias, marker)
-            })
-            .map(|m| (m.start_line, m.end_line))
-            .collect();
+        let marker_spans = editable_marker_spans(&content, &self.alias);
 
         let first = content.find(&args.old_text);
         let last = content.rfind(&args.old_text);
@@ -130,7 +126,9 @@ impl Tool for EditFileTool<'_> {
             ))),
             (Some(pos), _) => {
                 // --- Line scope restriction ---
-                if !is_edit_near_marker(&marker_spans, &content, pos, &args.old_text) {
+                if self.app_state.config.edition_constraints == EditionConstraints::VicinityBefore
+                    && !is_edit_near_marker(&marker_spans, &content, pos, &args.old_text)
+                {
                     return Err(EditFileError(format!(
                         "Edit rejected: neither the start nor end line of old_text \
                          is within {} lines of any marker. \
@@ -152,7 +150,7 @@ impl Tool for EditFileTool<'_> {
                     ));
                 }
 
-                if self.app_state.config.marker_limits_edition_range
+                if self.app_state.config.edition_constraints == EditionConstraints::VicinityBefore
                     && is_edit_over_marker(&marker_spans, &content, pos, &args.old_text)
                 {
                     return Err(EditFileError(
@@ -178,6 +176,16 @@ impl Tool for EditFileTool<'_> {
             }
         }
     }
+}
+
+pub(crate) fn editable_marker_spans(content: &str, alias: &str) -> Vec<(usize, usize)> {
+    crate::markers::find_markers(content, alias)
+        .iter()
+        .filter(|marker| {
+            marker.kind == MarkerKind::Task && !crate::markers::is_stopped(content, alias, marker)
+        })
+        .map(|marker| (marker.start_line, marker.end_line))
+        .collect()
 }
 
 fn removes_multiline_opener_without_closer(
@@ -272,12 +280,12 @@ mod tests {
     }
 
     fn make_tool(file_path: &std::path::Path) -> EditFileTool<'static> {
+        let config = crate::config::Config {
+            edition_constraints: EditionConstraints::VicinityBefore,
+            ..Default::default()
+        };
         let app_state = Box::leak(Box::new(
-            crate::state::AppState::new(
-                file_path.parent().unwrap().to_path_buf(),
-                crate::config::Config::default(),
-            )
-            .unwrap(),
+            crate::state::AppState::new(file_path.parent().unwrap().to_path_buf(), config).unwrap(),
         ));
         EditFileTool {
             app_state,
@@ -287,11 +295,9 @@ mod tests {
         }
     }
 
-    // Note: this tests checks for default only (i.e. so that limit is enabled)
-    //       might require some testing tricks instead
     #[tokio::test]
     async fn test_edit_over_two_markers_rejected() -> anyhow::Result<()> {
-        // With marker_limits_edition_range enabled (the default), an edit whose
+        // With vicinity-before enabled, an edit whose
         // text spans two markers must be rejected.
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test.txt");
@@ -333,8 +339,10 @@ mod tests {
             &file_path,
             "before\nrik: first task\nmiddle content\nrik: second task\nafter\n",
         )?;
-        let mut config = crate::config::Config::default();
-        config.marker_limits_edition_range = false;
+        let config = crate::config::Config {
+            edition_constraints: EditionConstraints::None,
+            ..Default::default()
+        };
         let app_state = crate::state::AppState::new(dir.path().to_path_buf(), config)?;
         let tool = EditFileTool {
             app_state: &app_state,
@@ -350,6 +358,33 @@ mod tests {
         .await?;
 
         assert!(std::fs::read_to_string(file_path)?.contains("replaced everything"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vicinity_after_allows_far_edit_before_reconciliation() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "far away\n\n\n\n\n\n\n\n\nrik: task\n")?;
+        let config = crate::config::Config {
+            edition_constraints: EditionConstraints::VicinityAfter,
+            ..Default::default()
+        };
+        let app_state = crate::state::AppState::new(dir.path().to_path_buf(), config)?;
+        let tool = EditFileTool {
+            app_state: &app_state,
+            target_path: file_path.display().to_string(),
+            alias: "rik".to_string(),
+            read_history: Arc::default(),
+        };
+
+        tool.call(EditFileArgs {
+            old_text: "far away".into(),
+            new_text: "changed first".into(),
+        })
+        .await?;
+
+        assert!(std::fs::read_to_string(file_path)?.contains("changed first"));
         Ok(())
     }
 
@@ -818,9 +853,7 @@ mod tests {
         // Build file with unique labels so old_text always matches exactly once.
         let mut parts: Vec<String> = Vec::new();
         for i in 1..=20u32 {
-            if i == 3 {
-                parts.push("rik: do something".to_string());
-            } else if i == 15 {
+            if i == 3 || i == 15 {
                 parts.push("rik: do something".to_string());
             } else {
                 parts.push(format!("row_{:02}", i));

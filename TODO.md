@@ -15,7 +15,7 @@
   - Correct the documented tool count and include `send_message`.
   - Update the documented maximum tool turns from 20 to 30.
   - Reconcile the design-philosophy text with `write_file`.
-  - Document `personality` and `marker_limits_edition_range`.
+  - Document `personality` and `edition-constraints`.
 - Fix the current `cargo fmt --all --check` and
   `cargo clippy --all-targets --all-features -- -D warnings` failures.
 
