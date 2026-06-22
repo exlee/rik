@@ -54,6 +54,8 @@ pub struct Config {
     pub diff_tool: Option<Vec<String>>,
     /// Enable personality mode. When enabled, Rik will be more chatty about his work.
     pub personality: bool,
+    /// Write question answers back into the source file instead of only printing them.
+    pub write_answers: bool,
     /// Internal edit boundary policy.
     pub edition_constraints: EditionConstraints,
 }
@@ -75,6 +77,7 @@ impl Default for Config {
             model: ModelConfig::default(),
             diff_tool: None,
             personality: false,
+            write_answers: false,
             edition_constraints: EditionConstraints::VicinityAfter,
         }
     }
@@ -87,6 +90,8 @@ struct RawConfig {
     pub diff_tool: Option<Vec<String>>,
     #[serde(default)]
     pub personality: bool,
+    #[serde(default, rename = "write-answers", alias = "write_answers")]
+    pub write_answers: bool,
     #[serde(default, rename = "edition-constraints", alias = "edition_constraints")]
     pub edition_constraints: Option<EditionConstraints>,
     #[serde(default)]
@@ -110,6 +115,7 @@ impl<'de> Deserialize<'de> for Config {
             model: raw.model,
             diff_tool: raw.diff_tool,
             personality: raw.personality,
+            write_answers: raw.write_answers,
             edition_constraints,
         })
     }
@@ -255,10 +261,27 @@ mod tests {
         assert_eq!(config.model.provider, Provider::Anthropic);
         assert_eq!(config.model.model, "claude");
         assert!(config.personality);
+        assert!(!config.write_answers);
         assert_eq!(
             config.edition_constraints,
             EditionConstraints::VicinityAfter
         );
+    }
+
+    #[test]
+    fn parses_write_answers_config() {
+        let config = parse(
+            r#"
+                write-answers = true
+                [model]
+                provider = "openai"
+                model = "gpt"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert!(config.write_answers);
     }
 
     #[test]

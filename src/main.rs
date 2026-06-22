@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long)]
     personality: bool,
 
+    /// Replace question markers with Q/A blocks
+    #[arg(long)]
+    write_answers: bool,
+
     /// Model profile to use (e.g. "openrouter.gpt120")
     #[arg(long)]
     model: Option<String>,
@@ -58,6 +62,9 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.personality {
         config.personality = true;
+    }
+    if cli.write_answers {
+        config.write_answers = true;
     }
 
     let state = state::init_for_pattern(&cli.pattern, config)?;
@@ -146,6 +153,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_write_answers_flag() {
+        let cli = Cli::try_parse_from(["rik", "--write-answers", "src"]).unwrap();
+
+        assert!(cli.write_answers);
+        assert_eq!(cli.pattern, "src");
+    }
+
+    #[test]
     fn help_lists_system_prompt_flag() {
         use clap::CommandFactory as _;
 
@@ -153,6 +168,7 @@ mod tests {
 
         assert!(help.contains("-s, --system-prompt <SYSTEM_PROMPT>"));
         assert!(help.contains("--no-ignore"));
+        assert!(help.contains("--write-answers"));
     }
 
     #[test]

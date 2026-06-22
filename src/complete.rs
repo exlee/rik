@@ -278,6 +278,135 @@ fn question_text(marker: &crate::markers::FoundMarker) -> String {
         .join(" ")
 }
 
+fn marker_line_start(content: &str, marker: &crate::markers::FoundMarker) -> String {
+    content
+        .lines()
+        .nth(marker.start_line.saturating_sub(1))
+        .and_then(|line| line.find(&marker.prefix).map(|pos| line[..pos].to_string()))
+        .unwrap_or_default()
+}
+
+fn wrap_answer_line(line: &str, width: usize) -> Vec<String> {
+    let mut wrapped = Vec::new();
+    let mut current = String::new();
+
+    for word in line.split_whitespace() {
+        let separator = usize::from(!current.is_empty());
+        if !current.is_empty() && current.len() + separator + word.len() > width {
+            wrapped.push(current);
+            current = String::new();
+        }
+
+        if !current.is_empty() {
+            current.push(' ');
+        }
+
+        if word.len() > width && current.is_empty() {
+            wrapped.push(word.to_string());
+        } else {
+            current.push_str(word);
+        }
+    }
+
+    if !current.is_empty() {
+        wrapped.push(current);
+    }
+
+    wrapped
+}
+
+fn format_written_answer(
+    content: &str,
+    marker: &crate::markers::FoundMarker,
+    answer: &str,
+) -> Vec<String> {
+    let line_start = marker_line_start(content, marker);
+    let q_prefix = format!("{line_start}Q: ");
+    let a_prefix = format!("{line_start}A: ");
+    let continuation_prefix = format!("{line_start}   ");
+    let answer_width = 100usize.saturating_sub(a_prefix.len()).max(1);
+    let continuation_width = 100usize.saturating_sub(continuation_prefix.len()).max(1);
+    let mut lines = vec![format!("{q_prefix}{}", question_text(marker))];
+    let mut first_answer_line = true;
+
+    for raw_line in answer.lines() {
+        let wrapped = wrap_answer_line(raw_line, answer_width);
+        if wrapped.is_empty() {
+            lines.push(continuation_prefix.trim_end().to_string());
+            continue;
+        }
+
+        for wrapped_line in wrapped {
+            if first_answer_line {
+                lines.push(format!("{a_prefix}{wrapped_line}"));
+                first_answer_line = false;
+            } else {
+                let width = continuation_width;
+                let mut continuation_chunks = wrap_answer_line(&wrapped_line, width);
+                if continuation_chunks.is_empty() {
+                    continuation_chunks.push(String::new());
+                }
+                for chunk in continuation_chunks {
+                    lines.push(format!("{continuation_prefix}{chunk}"));
+                }
+            }
+        }
+    }
+
+    if first_answer_line {
+        lines.push(a_prefix.trim_end().to_string());
+    }
+
+    lines
+}
+
+fn write_answer_to_file(
+    file_path: &std::path::Path,
+    alias: &str,
+    completed: &crate::markers::FoundMarker,
+    answer: &str,
+) -> anyhow::Result<bool> {
+    let content = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read for answer write: {}", file_path.display()))?;
+    let markers = crate::markers::find_markers(&content, alias);
+    let Some(marker) = markers.iter().find(|marker| {
+        marker.start_line == completed.start_line
+            && marker.end_line == completed.end_line
+            && marker.kind == completed.kind
+            && marker.query == completed.query
+            && marker.prefix == completed.prefix
+    }) else {
+        return Ok(false);
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+    let had_trailing_newline = content.ends_with('\n');
+    let replacement = format_written_answer(&content, marker, answer);
+    let mut rewritten = Vec::new();
+
+    rewritten.extend(
+        lines
+            .iter()
+            .take(marker.start_line.saturating_sub(1))
+            .map(|line| (*line).to_string()),
+    );
+    rewritten.extend(replacement);
+    rewritten.extend(
+        lines
+            .iter()
+            .skip(marker.end_line)
+            .map(|line| (*line).to_string()),
+    );
+
+    let mut output = rewritten.join("\n");
+    if had_trailing_newline {
+        output.push('\n');
+    }
+    std::fs::write(file_path, output)
+        .with_context(|| format!("Failed to write answer to {}", file_path.display()))?;
+    Ok(true)
+}
+
 fn marker_replacement_instruction(
     marker: &crate::markers::FoundMarker,
     edition_constraints: EditionConstraints,
@@ -358,7 +487,7 @@ where
     }
     let agent = agent_builder.build();
     let mut stream = agent.stream_prompt(&prompt).await;
-    let mut answered = false;
+    let mut answer = None;
 
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
@@ -367,13 +496,13 @@ where
         }
         match item {
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
-                let answer = res.response();
-                if !answer.is_empty() {
+                let response = res.response();
+                if !response.is_empty() {
                     println!("\n\n== ANSWER START ==\n");
-                    println!("{answer}");
+                    println!("{response}");
                     println!("\n== ANSWER END ==");
                 }
-                answered = true;
+                answer = Some(response.to_string());
             }
             Err(e) => {
                 eprintln!("Stream error: {e}");
@@ -383,11 +512,19 @@ where
         }
     }
 
-    if answered {
-        app_state.remember_answered_question(file_path, question_marker);
-    } else {
+    let Some(answer) = answer else {
+        return Ok(false);
+    };
+
+    if answer.is_empty() {
         return Ok(false);
     }
+
+    if app_state.config.write_answers {
+        write_answer_to_file(file_path, alias, question_marker, &answer)?;
+    }
+
+    app_state.remember_answered_question(file_path, question_marker);
     Ok(true)
 }
 
@@ -1269,6 +1406,56 @@ mod tests {
                 personality: true,
             }
         );
+    }
+
+    #[test]
+    fn written_answer_uses_question_line_start_and_aligns_continuations() {
+        let content = "// rik: is a sky blue?\n";
+        let marker = crate::markers::find_markers(content, "rik").remove(0);
+        let formatted =
+            format_written_answer(content, &marker, "I'm a LLM agent\nSo I can't really tell.");
+
+        assert_eq!(
+            formatted,
+            vec![
+                "// Q: is a sky blue?".to_string(),
+                "// A: I'm a LLM agent".to_string(),
+                "//    So I can't really tell.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn written_answer_wraps_to_one_hundred_total_columns() {
+        let content = "// rik: explain?\n";
+        let marker = crate::markers::find_markers(content, "rik").remove(0);
+        let answer = "alpha ".repeat(30);
+        let formatted = format_written_answer(content, &marker, &answer);
+
+        assert!(formatted.iter().skip(1).all(|line| line.len() <= 100));
+        assert!(formatted[1].starts_with("// A: "));
+        assert!(formatted[2].starts_with("//    "));
+    }
+
+    #[test]
+    fn write_answer_replaces_question_marker_span() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.rs");
+        std::fs::write(&file, "before\n// rik: is a sky blue?\nafter\n")?;
+        let content = std::fs::read_to_string(&file)?;
+        let marker = crate::markers::find_markers(&content, "rik").remove(0);
+
+        assert!(write_answer_to_file(
+            &file,
+            "rik",
+            &marker,
+            "I'm a LLM agent\nSo I can't really tell.",
+        )?);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\n// Q: is a sky blue?\n// A: I'm a LLM agent\n//    So I can't really tell.\nafter\n"
+        );
+        Ok(())
     }
 
     #[test]

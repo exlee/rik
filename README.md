@@ -204,6 +204,9 @@ diff_tool = ["difft", "--color", "always", "$pre", "$post"]
 # Optional: print extra personality around edit tasks.
 personality = false
 
+# Optional: replace question markers with Q/A blocks instead of only printing answers.
+write-answers = false
+
 # Internal: edit boundary policy.
 # none = allow edits anywhere in the target file
 # vicinity-before = reject each edit_file call outside the marker vicinity
@@ -305,7 +308,23 @@ End a marker with `?` to ask Rik a read-only question:
 rik: why is this function allocation-heavy?
 ```
 
-Question markers are handled individually, in top-to-bottom order alongside normal markers. For a question marker, Rik uses a separate read-only prompt with only `read_file` and `list_files`, prints just the answer, and leaves the exact question line untouched. Rik remembers answered question locations in memory so watch mode does not answer the same line repeatedly; restarting Rik clears that memory.
+Question markers are handled individually, in top-to-bottom order alongside normal markers. For a question marker, Rik uses a separate read-only prompt with only `read_file` and `list_files`, prints just the answer, and leaves the exact question line untouched by default. Rik remembers answered question locations in memory so watch mode does not answer the same line repeatedly; restarting Rik clears that memory.
+
+Set `write-answers = true`, or start Rik with `--write-answers`, to replace the question marker with a `Q:` / `A:` block using the same line start as the original marker:
+
+```text
+// rik: is a sky blue?
+```
+
+becomes:
+
+```text
+// Q: is a sky blue?
+// A: I'm a LLM agent
+//    So I can't really tell.
+```
+
+Written answers are wrapped to 100 columns, with continuation lines aligned under the answer text.
 
 Questions can use dynamic tools defined in their file only when the question contains
 `+tool` or `+tools`:
