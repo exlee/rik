@@ -41,6 +41,10 @@ struct Cli {
     /// Additional overarching instructions for the agent
     #[arg(short = 's', long)]
     system_prompt: Option<String>,
+
+    /// Do not honor .gitignore, .ignore, or git exclude files when scanning
+    #[arg(long)]
+    no_ignore: bool,
 }
 
 #[tokio::main]
@@ -71,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
             &cli.alias,
             cli.pattern,
             cli.verbose,
+            cli.no_ignore,
             cli.system_prompt.as_deref(),
         )
         .await
@@ -80,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
             &cli.alias,
             cli.pattern,
             cli.verbose,
+            cli.no_ignore,
             cli.system_prompt.as_deref(),
         )
         .await
@@ -132,12 +138,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_no_ignore_flag() {
+        let cli = Cli::try_parse_from(["rik", "--no-ignore", "src"]).unwrap();
+
+        assert!(cli.no_ignore);
+        assert_eq!(cli.pattern, "src");
+    }
+
+    #[test]
     fn help_lists_system_prompt_flag() {
         use clap::CommandFactory as _;
 
         let help = Cli::command().render_help().to_string();
 
         assert!(help.contains("-s, --system-prompt <SYSTEM_PROMPT>"));
+        assert!(help.contains("--no-ignore"));
     }
 
     #[test]

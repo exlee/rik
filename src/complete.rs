@@ -39,6 +39,7 @@ struct ProcessingOptions<'a> {
     diff_tool: Option<&'a Vec<String>>,
     verbose: bool,
     personality: bool,
+    no_ignore: bool,
     system_prompt: Option<&'a str>,
 }
 
@@ -81,6 +82,7 @@ macro_rules! define_provider_dispatch {
             pattern: &str,
             verbose: bool,
             personality: bool,
+            no_ignore: bool,
             system_prompt: Option<&str>,
         ) -> anyhow::Result<ScanOutcome> {
             match cfg.provider {
@@ -98,6 +100,7 @@ macro_rules! define_provider_dispatch {
                                 diff_tool,
                                 verbose,
                                 personality,
+                                no_ignore,
                                 system_prompt,
                             },
                         ).await
@@ -673,6 +676,7 @@ where
         verbose,
         personality,
         system_prompt,
+        ..
     } = options;
     let content_before = std::fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read: {}", file_path.display()))?;
@@ -1078,7 +1082,7 @@ where
     C::CompletionModel: 'static,
 {
     let alias = options.alias;
-    let files = expand_glob(app_state, pattern)?;
+    let files = expand_glob(app_state, pattern, options.no_ignore)?;
     if files.is_empty() {
         anyhow::bail!("No files matched pattern: {pattern}");
     }
@@ -1110,6 +1114,7 @@ pub async fn cmd_complete(
     alias: &str,
     pattern: String,
     verbose: bool,
+    no_ignore: bool,
     system_prompt: Option<&str>,
 ) -> anyhow::Result<()> {
     let config = &app_state.config;
@@ -1122,6 +1127,7 @@ pub async fn cmd_complete(
         &pattern,
         verbose,
         config.personality,
+        no_ignore,
         system_prompt,
     )
     .await?;
@@ -1491,58 +1497,29 @@ mod tests {
     fn vicinity_after_restores_stray_change_and_keeps_marker_change() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let file = dir.path().join("markers.txt");
-        let before = concat!(
-            "stray original\n",
-            "line 2\n",
-            "line 3\n",
-            "line 4\n",
-            "line 5\n",
-            "line 6\n",
-            "line 7\n",
-            "line 8\n",
-            "line 9\n",
-            "line 10\n",
-            "rik: task\n",
-            "near original\n",
-        );
-        std::fs::write(&file, before)?;
-        std::fs::write(
-            &file,
-            concat!(
-                "stray changed\n",
-                "line 2\n",
-                "line 3\n",
-                "line 4\n",
-                "line 5\n",
-                "line 6\n",
-                "line 7\n",
-                "line 8\n",
-                "line 9\n",
-                "line 10\n",
-                "rik: task\n",
-                "near changed\n",
-            ),
-        )?;
+        let before_lines = std::iter::once("stray original".to_string())
+            .chain((2..=25).map(|line| format!("line {line}")))
+            .chain(["rik: task".to_string(), "near original".to_string()])
+            .collect::<Vec<_>>();
+        let produced_lines = std::iter::once("stray changed".to_string())
+            .chain((2..=25).map(|line| format!("line {line}")))
+            .chain(["rik: task".to_string(), "near changed".to_string()])
+            .collect::<Vec<_>>();
+        let before = format!("{}\n", before_lines.join("\n"));
+        let produced = format!("{}\n", produced_lines.join("\n"));
+        std::fs::write(&file, &before)?;
+        std::fs::write(&file, produced)?;
 
-        let rejected = apply_vicinity_after_constraints(&file, "rik", before)?;
+        let rejected = apply_vicinity_after_constraints(&file, "rik", &before)?;
 
         assert_eq!(rejected, 1);
+        let expected = std::iter::once("stray original".to_string())
+            .chain((2..=25).map(|line| format!("line {line}")))
+            .chain(["rik: task".to_string(), "near changed".to_string()])
+            .collect::<Vec<_>>();
         assert_eq!(
             std::fs::read_to_string(&file)?,
-            concat!(
-                "stray original\n",
-                "line 2\n",
-                "line 3\n",
-                "line 4\n",
-                "line 5\n",
-                "line 6\n",
-                "line 7\n",
-                "line 8\n",
-                "line 9\n",
-                "line 10\n",
-                "rik: task\n",
-                "near changed\n",
-            )
+            format!("{}\n", expected.join("\n"))
         );
         Ok(())
     }
@@ -1581,58 +1558,41 @@ mod tests {
     fn vicinity_after_keeps_previous_line_modification_near_marker() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let file = dir.path().join("markers.txt");
-        let before = concat!(
-            "stray original\n",
-            "line 2\n",
-            "line 3\n",
-            "line 4\n",
-            "line 5\n",
-            "line 6\n",
-            "line 7\n",
-            "line 8\n",
-            "line 9\n",
-            "previous original\n",
-            "rik: task\n",
-            "after\n",
-        );
-        std::fs::write(&file, before)?;
-        std::fs::write(
-            &file,
-            concat!(
-                "stray changed\n",
-                "line 2\n",
-                "line 3\n",
-                "line 4\n",
-                "line 5\n",
-                "line 6\n",
-                "line 7\n",
-                "line 8\n",
-                "line 9\n",
-                "previous changed\n",
-                "rik: task\n",
-                "after\n",
-            ),
-        )?;
+        let before_lines = std::iter::once("stray original".to_string())
+            .chain((2..=25).map(|line| format!("line {line}")))
+            .chain([
+                "previous original".to_string(),
+                "rik: task".to_string(),
+                "after".to_string(),
+            ])
+            .collect::<Vec<_>>();
+        let produced_lines = std::iter::once("stray changed".to_string())
+            .chain((2..=25).map(|line| format!("line {line}")))
+            .chain([
+                "previous changed".to_string(),
+                "rik: task".to_string(),
+                "after".to_string(),
+            ])
+            .collect::<Vec<_>>();
+        let before = format!("{}\n", before_lines.join("\n"));
+        let produced = format!("{}\n", produced_lines.join("\n"));
+        std::fs::write(&file, &before)?;
+        std::fs::write(&file, produced)?;
 
-        let rejected = apply_vicinity_after_constraints(&file, "rik", before)?;
+        let rejected = apply_vicinity_after_constraints(&file, "rik", &before)?;
 
         assert_eq!(rejected, 1);
+        let expected = std::iter::once("stray original".to_string())
+            .chain((2..=25).map(|line| format!("line {line}")))
+            .chain([
+                "previous changed".to_string(),
+                "rik: task".to_string(),
+                "after".to_string(),
+            ])
+            .collect::<Vec<_>>();
         assert_eq!(
             std::fs::read_to_string(&file)?,
-            concat!(
-                "stray original\n",
-                "line 2\n",
-                "line 3\n",
-                "line 4\n",
-                "line 5\n",
-                "line 6\n",
-                "line 7\n",
-                "line 8\n",
-                "line 9\n",
-                "previous changed\n",
-                "rik: task\n",
-                "after\n",
-            )
+            format!("{}\n", expected.join("\n"))
         );
         Ok(())
     }
@@ -1669,9 +1629,10 @@ fn content_hash(path: &std::path::Path) -> Option<u64> {
 fn snapshot_hashes(
     app_state: &AppState,
     pattern: &str,
+    no_ignore: bool,
 ) -> std::collections::HashMap<std::path::PathBuf, u64> {
     let mut hashes = std::collections::HashMap::new();
-    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern) {
+    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern, no_ignore) {
         for path in files {
             if let Some(h) = content_hash(&path) {
                 hashes.insert(path, h);
@@ -1686,9 +1647,10 @@ fn snapshot_hashes(
 fn files_changed(
     app_state: &AppState,
     pattern: &str,
+    no_ignore: bool,
     prev: &std::collections::HashMap<std::path::PathBuf, u64>,
 ) -> bool {
-    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern) {
+    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern, no_ignore) {
         for path in &files {
             match content_hash(path) {
                 Some(h) => match prev.get(path) {
@@ -1714,6 +1676,7 @@ pub async fn cmd_watch(
     alias: &str,
     pattern: String,
     verbose: bool,
+    no_ignore: bool,
     system_prompt: Option<&str>,
 ) -> anyhow::Result<()> {
     use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
@@ -1743,10 +1706,11 @@ pub async fn cmd_watch(
         &pattern,
         verbose,
         config.personality,
+        no_ignore,
         system_prompt,
     )
     .await;
-    let mut prev_hashes = snapshot_hashes(app_state, &pattern);
+    let mut prev_hashes = snapshot_hashes(app_state, &pattern, no_ignore);
 
     loop {
         if crate::keyboard::should_stop() {
@@ -1763,7 +1727,7 @@ pub async fn cmd_watch(
                 while rx.try_recv().is_ok() {}
 
                 // Skip processing if no file content has actually changed.
-                if !files_changed(app_state, &pattern, &prev_hashes) {
+                if !files_changed(app_state, &pattern, no_ignore, &prev_hashes) {
                     continue;
                 }
 
@@ -1775,13 +1739,14 @@ pub async fn cmd_watch(
                     &pattern,
                     verbose,
                     config.personality,
+                    no_ignore,
                     system_prompt,
                 )
                 .await
                 {
                     eprintln!("Watch error: {e:?}");
                 }
-                prev_hashes = snapshot_hashes(app_state, &pattern);
+                prev_hashes = snapshot_hashes(app_state, &pattern, no_ignore);
             }
             Ok(Err(e)) => {
                 eprintln!("Watch error: {e}");

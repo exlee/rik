@@ -578,12 +578,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_far_from_marker_rejected() -> anyhow::Result<()> {
-        // Marker inserted before index 19 → marker at line 20.
-        // Edit on line 5 — more than 7 lines away.
+        // Marker inserted before index 24 → marker at line 25.
+        // Edit on line 5 — more than MARKER_RADIUS lines away.
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test.txt");
         let mut lines: Vec<String> = (1..=30).map(|i| format!("line {}", i)).collect();
-        insert_marker_before(&mut lines, 19); // marker at line 20
+        insert_marker_before(&mut lines, 24); // marker at line 25
         std::fs::write(&file_path, lines.join("\n"))?;
 
         let tool = make_tool(&file_path);
@@ -768,16 +768,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_wide_edit_spanning_marker_rejected() -> anyhow::Result<()> {
-        // Marker on line 10. Edit spans lines 1-20.
-        // Neither endpoint (line 1 nor line 20) is within MARKER_RADIUS=7 of line 10.
+        // Marker on line 25. Edit spans lines 1-45.
+        // Neither endpoint is within MARKER_RADIUS of line 25.
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test.txt");
-        let content = build_file_with_marker(25, 10);
+        let content = build_file_with_marker(50, 25);
         std::fs::write(&file_path, &content)?;
 
-        // Grab the exact text from lines 1..=20 from the file.
+        // Grab the exact text from lines 1..=45 from the file.
         let file_lines: Vec<&str> = content.lines().collect();
-        let old_text = file_lines[0..20].join("\n");
+        let old_text = file_lines[0..45].join("\n");
 
         let tool = make_tool(&file_path);
         let result = tool
@@ -941,19 +941,11 @@ mod tests {
         // Emoji content far from the marker — edit must be rejected.
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test.txt");
-        let content = concat!(
-            "let a = \"🐸🐸🐸\";\n",
-            "let b = \"✨\";\n",
-            "let c = \"🌈\";\n",
-            "let d = \"🎉\";\n",
-            "let e = \"🎃\";\n",
-            "let f = \"👽\";\n",
-            "let g = \"🤖\";\n",
-            "let h = \"🧠\";\n",
-            "let i = \"💡\";\n",
-            "rik: do something\n",
-            "let j = \"🚀\";\n",
-        );
+        let mut lines = vec!["let a = \"🐸🐸🐸\";".to_string()];
+        lines.extend((2..=25).map(|i| format!("line {i}")));
+        lines.push("rik: do something".to_string());
+        lines.push("let j = \"🚀\";".to_string());
+        let content = lines.join("\n");
         std::fs::write(&file_path, content)?;
 
         let tool = make_tool(&file_path);

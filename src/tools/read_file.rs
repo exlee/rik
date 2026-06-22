@@ -202,6 +202,12 @@ impl Tool for ReadFileTool<'_> {
         if !path.exists() {
             return Err(ReadFileError(format!("File not found: {}", path.display())));
         }
+        if crate::helpers::is_binary_file(&path) {
+            return Err(ReadFileError(format!(
+                "Refusing to read binary file: {}",
+                path.display()
+            )));
+        }
 
         let content = std::fs::read_to_string(&path)?;
         let mut hasher = DefaultHasher::new();
@@ -319,6 +325,29 @@ mod tests {
             result.ends_with("[lines 2-3]\nline2\nline3"),
             "Expected result to end with 'line2\nline3', got: {result}"
         );
+        cleanup_rel(&rel);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_file_rejects_binary_file() -> anyhow::Result<()> {
+        let (abs, rel) = make_relative_dir("binary");
+        let file_path = abs.join("binary.bin");
+        let rel_file = format!("{}/binary.bin", rel);
+        std::fs::write(&file_path, b"line1\0line2")?;
+
+        let app_state = app_state();
+        let tool = ReadFileTool::new(&app_state);
+        let result = tool
+            .call(ReadFileArgs {
+                path: rel_file,
+                offset: None,
+                limit: None,
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("binary file"));
         cleanup_rel(&rel);
         Ok(())
     }

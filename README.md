@@ -282,6 +282,13 @@ Multiple patterns can be joined with commas:
 rik 'src/**/*.rs,tests/**/*.rs'
 ```
 
+Scans honor `.gitignore`, `.ignore`, and git exclude files by default, and
+binary files are skipped. Pass `--no-ignore` to include ignored text files:
+
+```bash
+rik --no-ignore 'src/**/*.rs'
+```
+
 ### Context markers
 
 Use slash-delimited markers to provide extra context without content replacement. The marker is removed after processing:
@@ -365,10 +372,10 @@ rik gives the agent five built-in tools during task processing:
 
 | Tool | Purpose |
 |---|---|
-| `read_file` | Read other files for context (types, imports, conventions). Supports offset/limit and omits lines already returned during the current task. |
+| `read_file` | Read other text files for context (types, imports, conventions). Supports offset/limit and omits lines already returned during the current task. |
 | `edit_file` | Replace exact text in the target file. Requires unique match and resets `read_file` history after a successful edit. |
 | `write_file` | Create new files (refuses to overwrite existing ones). |
-| `list_files` | Discover files in the project. Respects `.gitignore`. Supports glob filters. |
+| `list_files` | Discover text files in the project. Respects `.gitignore` and `.ignore`. Supports glob filters. |
 | `send_message` | Send a final status message without changing files. |
 
 All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 30 turns before producing final edits.

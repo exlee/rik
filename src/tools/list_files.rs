@@ -97,7 +97,9 @@ impl Tool for ListFilesTool<'_> {
 
         let mut paths: Vec<String> = Vec::new();
         for entry in builder.build().filter_map(|e| e.ok()) {
-            if entry.file_type().is_some_and(|ft| ft.is_file()) {
+            if entry.file_type().is_some_and(|ft| ft.is_file())
+                && !crate::helpers::is_binary_file(entry.path())
+            {
                 paths.push(entry.path().display().to_string());
             }
         }
@@ -197,6 +199,29 @@ mod tests {
         assert!(result.contains("a.txt"));
         assert!(!result.contains("ignored.log"));
         assert!(result.contains(".ignore"));
+        cleanup_rel(&rel);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_files_omits_binary_files() -> anyhow::Result<()> {
+        let (abs, rel) = make_relative_dir("list_binary");
+        std::fs::write(abs.join("a.txt"), "a")?;
+        std::fs::write(abs.join("binary.bin"), b"a\0b")?;
+
+        let app_state = app_state();
+        let tool = ListFilesTool {
+            app_state: &app_state,
+        };
+        let result = tool
+            .call(ListFilesArgs {
+                path: Some(rel.clone()),
+                glob: None,
+            })
+            .await?;
+
+        assert!(result.contains("a.txt"));
+        assert!(!result.contains("binary.bin"));
         cleanup_rel(&rel);
         Ok(())
     }

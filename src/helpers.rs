@@ -274,8 +274,14 @@ fn common_ancestor(a: &std::path::Path, b: &std::path::Path) -> std::path::PathB
 pub fn expand_glob(
     app_state: &crate::state::AppState,
     pattern: &str,
+    no_ignore: bool,
 ) -> Result<Vec<std::path::PathBuf>> {
-    let mut results: Vec<std::path::PathBuf> = Vec::new();
+    enum Matcher {
+        Literal(std::path::PathBuf),
+        Glob(glob::Pattern),
+    }
+
+    let mut matchers = Vec::new();
 
     for part in pattern.split(',') {
         let part = part.trim();
@@ -283,26 +289,64 @@ pub fn expand_glob(
             continue;
         }
 
-        // If the part is a literal existing file, return it directly.
         let path = app_state.resolve_path(part)?;
         if path.is_file() {
-            results.push(path);
+            matchers.push(Matcher::Literal(path));
+        } else {
+            let glob = glob::Pattern::new(path.to_string_lossy().as_ref())
+                .with_context(|| format!("Invalid glob pattern: {part}"))?;
+            matchers.push(Matcher::Glob(glob));
+        }
+    }
+
+    let mut builder = ignore::WalkBuilder::new(&app_state.path);
+    builder
+        .hidden(false)
+        .git_ignore(!no_ignore)
+        .git_global(!no_ignore)
+        .git_exclude(!no_ignore)
+        .ignore(!no_ignore)
+        .parents(!no_ignore);
+
+    let mut results = Vec::new();
+    for entry in builder.build().filter_map(|entry| entry.ok()) {
+        if !entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
             continue;
         }
 
-        // Otherwise treat as a glob pattern.
-        use glob::glob;
-        let matches = glob(path.to_string_lossy().as_ref())
-            .with_context(|| format!("Invalid glob pattern: {part}"))?;
-        for entry in matches
-            .filter_map(|entry| entry.ok())
-            .filter(|p| p.is_file())
-        {
-            results.push(app_state.resolve_path(entry.to_string_lossy().as_ref())?);
+        let path = entry.path();
+        if is_binary_file(path) {
+            continue;
+        }
+
+        let matched = matchers.iter().any(|matcher| match matcher {
+            Matcher::Literal(literal) => path == literal,
+            Matcher::Glob(glob) => glob.matches_path(path),
+        });
+        if matched {
+            results.push(path.to_path_buf());
         }
     }
 
     Ok(results)
+}
+
+pub fn is_binary_file(path: &std::path::Path) -> bool {
+    const SAMPLE_SIZE: usize = 8192;
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return true,
+    };
+    let mut buffer = [0u8; SAMPLE_SIZE];
+    let read = match std::io::Read::read(&mut file, &mut buffer) {
+        Ok(read) => read,
+        Err(_) => return true,
+    };
+    buffer[..read].contains(&0)
 }
 
 /// Diff tools to try in order when none is configured.
@@ -453,6 +497,63 @@ mod tests {
         );
 
         assert_eq!(watched_directory(&pattern)?, project.canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn expand_glob_honors_ignore_files_by_default() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project)?;
+        std::fs::write(project.join(".ignore"), "ignored.txt\n")?;
+        std::fs::write(project.join("kept.txt"), "rik: keep\n")?;
+        std::fs::write(project.join("ignored.txt"), "rik: ignore\n")?;
+        let state = crate::state::AppState::new(project.clone(), crate::config::Config::default())?;
+        let pattern = project.join("*.txt");
+
+        let files = expand_glob(&state, pattern.to_string_lossy().as_ref(), false)?;
+
+        assert_eq!(files, vec![project.join("kept.txt").canonicalize()?]);
+        Ok(())
+    }
+
+    #[test]
+    fn expand_glob_can_disable_ignore_files() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project)?;
+        std::fs::write(project.join(".ignore"), "ignored.txt\n")?;
+        std::fs::write(project.join("kept.txt"), "rik: keep\n")?;
+        std::fs::write(project.join("ignored.txt"), "rik: include\n")?;
+        let state = crate::state::AppState::new(project.clone(), crate::config::Config::default())?;
+        let pattern = project.join("*.txt");
+
+        let mut files = expand_glob(&state, pattern.to_string_lossy().as_ref(), true)?;
+        files.sort();
+
+        assert_eq!(
+            files,
+            vec![
+                project.join("ignored.txt").canonicalize()?,
+                project.join("kept.txt").canonicalize()?
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn expand_glob_skips_binary_files() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project)?;
+        std::fs::write(project.join("text.txt"), "rik: keep\n")?;
+        std::fs::write(project.join("binary.txt"), b"rik: nope\0still nope")?;
+        let state = crate::state::AppState::new(project.clone(), crate::config::Config::default())?;
+        let pattern = project.join("*.txt");
+
+        let files = expand_glob(&state, pattern.to_string_lossy().as_ref(), true)?;
+
+        assert_eq!(files, vec![project.join("text.txt").canonicalize()?]);
         Ok(())
     }
 }
