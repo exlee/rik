@@ -28,6 +28,11 @@ Think of it as leaving sticky notes for an LLM and having someone actually follo
 
 ## News
 
+### rik 0.5.0 adds safer edits and persistent answers
+
+Rik now supports run-wide system prompts, optional in-file `Q:` / `A:` answers,
+ignore-aware scanning, and post-edit reconciliation that restores stray changes.
+
 ### rik 0.4.0 adds model profiles and more reliable markers
 
 Select inherited model profiles with `--model` or `default_model`. Delimited

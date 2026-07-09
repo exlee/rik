@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-09
+
+### Added
+- Supply additional run-wide agent instructions with `-s` or `--system-prompt`
+- Write question responses back as aligned, 100-column `Q:` / `A:` blocks with the `write-answers` config key or `--write-answers`
+- Include ignored text files in scans and watch mode with `--no-ignore`
+
+### Changed
+- Replace `marker_limits_edition_range` with the backward-compatible `edition-constraints` policy and make post-edit vicinity reconciliation the default
+- Honor `.gitignore`, `.ignore`, and Git exclude files during scans and watch mode, and skip binary files in scanning, listing, and reading
+
+### Fixed
+- Preserve edited multiline marker bodies when removing completed marker delimiters
+
+### Security
+- Update `crossbeam-epoch` and `quinn-proto` to releases that address RUSTSEC-2026-0204 and RUSTSEC-2026-0185
+
 ## [0.4.0] - 2026-06-11
 
 ### Added

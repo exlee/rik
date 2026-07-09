@@ -77,13 +77,8 @@ macro_rules! define_provider_dispatch {
         async fn scan_and_complete_dispatch(
             app_state: &AppState,
             cfg: &ModelConfig,
-            alias: &str,
-            diff_tool: Option<&Vec<String>>,
             pattern: &str,
-            verbose: bool,
-            personality: bool,
-            no_ignore: bool,
-            system_prompt: Option<&str>,
+            options: ProcessingOptions<'_>,
         ) -> anyhow::Result<ScanOutcome> {
             match cfg.provider {
                 $(
@@ -95,14 +90,7 @@ macro_rules! define_provider_dispatch {
                             &client,
                             &cfg.model,
                             pattern,
-                            ProcessingOptions {
-                                alias,
-                                diff_tool,
-                                verbose,
-                                personality,
-                                no_ignore,
-                                system_prompt,
-                            },
+                            options,
                         ).await
                     }
                 )*
@@ -455,16 +443,16 @@ async fn answer_questions<C>(
     app_state: &AppState,
     comp_client: &C,
     model_name: &str,
-    alias: &str,
     file_path: &std::path::Path,
     content: &str,
     question_marker: &crate::markers::FoundMarker,
-    system_prompt: Option<&str>,
+    options: ProcessingOptions<'_>,
 ) -> anyhow::Result<bool>
 where
     C: CompletionClient,
     C::CompletionModel: 'static,
 {
+    let alias = options.alias;
     let prompt = format!(
         "Target file: {}\nFile type: {}\n\nQUESTION at line {}: {}\n\
          Surrounding context:\n{}\n\nAnswer the question directly.",
@@ -477,7 +465,7 @@ where
 
     let mut agent_builder = comp_client
         .agent(model_name)
-        .preamble(&make_question_preamble(alias, system_prompt))
+        .preamble(&make_question_preamble(alias, options.system_prompt))
         .tool(tools::ReadFileTool::default())
         .tool(tools::ListFilesTool::default())
         .default_max_turns(30);
@@ -850,11 +838,10 @@ where
             app_state,
             comp_client,
             model_name,
-            alias,
             file_path,
             &content_before,
             &task_marker,
-            system_prompt,
+            options,
         )
         .await?;
         return Ok(ScanOutcome {
@@ -1259,13 +1246,15 @@ pub async fn cmd_complete(
     let outcome = scan_and_complete_dispatch(
         app_state,
         &config.model,
-        alias,
-        diff_tool,
         &pattern,
-        verbose,
-        config.personality,
-        no_ignore,
-        system_prompt,
+        ProcessingOptions {
+            alias,
+            diff_tool,
+            verbose,
+            personality: config.personality,
+            no_ignore,
+            system_prompt,
+        },
     )
     .await?;
 
@@ -1273,6 +1262,154 @@ pub async fn cmd_complete(
         println!("No '{alias}:' markers found.");
     } else if outcome.completed_markers > 0 {
         println!("Completed {} marker(s).", outcome.completed_markers);
+    }
+
+    Ok(())
+}
+
+/// Compute a lightweight hash of file contents for change detection.
+fn content_hash(path: &std::path::Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    Some(hasher.finish())
+}
+
+/// Snapshot hashes of all files matching the glob pattern.
+fn snapshot_hashes(
+    app_state: &AppState,
+    pattern: &str,
+    no_ignore: bool,
+) -> std::collections::HashMap<std::path::PathBuf, u64> {
+    let mut hashes = std::collections::HashMap::new();
+    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern, no_ignore) {
+        for path in files {
+            if let Some(h) = content_hash(&path) {
+                hashes.insert(path, h);
+            }
+        }
+    }
+    hashes
+}
+
+/// Check whether any file matching the glob has changed since `prev`.
+/// Returns true if at least one file has a different hash or is new.
+fn files_changed(
+    app_state: &AppState,
+    pattern: &str,
+    no_ignore: bool,
+    prev: &std::collections::HashMap<std::path::PathBuf, u64>,
+) -> bool {
+    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern, no_ignore) {
+        for path in &files {
+            match content_hash(path) {
+                Some(h) => match prev.get(path) {
+                    Some(&prev_h) if prev_h == h => {}
+                    _ => return true,
+                },
+                None => return true,
+            }
+        }
+        // Also detect files that were removed.
+        for prev_path in prev.keys() {
+            if !files.contains(prev_path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Watch mode: continuously monitor files for new/changed markers.
+pub async fn cmd_watch(
+    app_state: &AppState,
+    alias: &str,
+    pattern: String,
+    verbose: bool,
+    no_ignore: bool,
+    system_prompt: Option<&str>,
+) -> anyhow::Result<()> {
+    use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
+    use std::sync::mpsc;
+
+    let watch_path = &app_state.path;
+
+    println!(
+        "Watching {} for '{alias}:' markers (pattern: {pattern})...",
+        watch_path.display()
+    );
+    println!("Press SPACE to stop current work, Ctrl+C to quit.\n");
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = recommended_watcher(tx)?;
+    watcher.watch(watch_path, RecursiveMode::Recursive)?;
+
+    let config = &app_state.config;
+    let diff_tool = config.diff_tool.as_ref();
+
+    // Initial scan — always run, then snapshot hashes.
+    let _ = scan_and_complete_dispatch(
+        app_state,
+        &config.model,
+        &pattern,
+        ProcessingOptions {
+            alias,
+            diff_tool,
+            verbose,
+            personality: config.personality,
+            no_ignore,
+            system_prompt,
+        },
+    )
+    .await;
+    let mut prev_hashes = snapshot_hashes(app_state, &pattern, no_ignore);
+
+    loop {
+        if crate::keyboard::should_stop() {
+            crate::keyboard::clear_stop();
+            continue;
+        }
+        if cleanup::is_shutting_down() {
+            break;
+        }
+
+        match rx.recv() {
+            Ok(Ok(_event)) => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                while rx.try_recv().is_ok() {}
+
+                // Skip processing if no file content has actually changed.
+                if !files_changed(app_state, &pattern, no_ignore, &prev_hashes) {
+                    continue;
+                }
+
+                if let Err(e) = scan_and_complete_dispatch(
+                    app_state,
+                    &config.model,
+                    &pattern,
+                    ProcessingOptions {
+                        alias,
+                        diff_tool,
+                        verbose,
+                        personality: config.personality,
+                        no_ignore,
+                        system_prompt,
+                    },
+                )
+                .await
+                {
+                    eprintln!("Watch error: {e:?}");
+                }
+                prev_hashes = snapshot_hashes(app_state, &pattern, no_ignore);
+            }
+            Ok(Err(e)) => {
+                eprintln!("Watch error: {e}");
+            }
+            Err(mpsc::RecvError) => {
+                break;
+            }
+        }
     }
 
     Ok(())
@@ -1801,148 +1938,4 @@ mod tests {
         );
         Ok(())
     }
-}
-
-/// Compute a lightweight hash of file contents for change detection.
-fn content_hash(path: &std::path::Path) -> Option<u64> {
-    use std::hash::{Hash, Hasher};
-    let content = std::fs::read_to_string(path).ok()?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    content.hash(&mut hasher);
-    Some(hasher.finish())
-}
-
-/// Snapshot hashes of all files matching the glob pattern.
-fn snapshot_hashes(
-    app_state: &AppState,
-    pattern: &str,
-    no_ignore: bool,
-) -> std::collections::HashMap<std::path::PathBuf, u64> {
-    let mut hashes = std::collections::HashMap::new();
-    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern, no_ignore) {
-        for path in files {
-            if let Some(h) = content_hash(&path) {
-                hashes.insert(path, h);
-            }
-        }
-    }
-    hashes
-}
-
-/// Check whether any file matching the glob has changed since `prev`.
-/// Returns true if at least one file has a different hash or is new.
-fn files_changed(
-    app_state: &AppState,
-    pattern: &str,
-    no_ignore: bool,
-    prev: &std::collections::HashMap<std::path::PathBuf, u64>,
-) -> bool {
-    if let Ok(files) = crate::helpers::expand_glob(app_state, pattern, no_ignore) {
-        for path in &files {
-            match content_hash(path) {
-                Some(h) => match prev.get(path) {
-                    Some(&prev_h) if prev_h == h => {}
-                    _ => return true,
-                },
-                None => return true,
-            }
-        }
-        // Also detect files that were removed.
-        for prev_path in prev.keys() {
-            if !files.contains(prev_path) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Watch mode: continuously monitor files for new/changed markers.
-pub async fn cmd_watch(
-    app_state: &AppState,
-    alias: &str,
-    pattern: String,
-    verbose: bool,
-    no_ignore: bool,
-    system_prompt: Option<&str>,
-) -> anyhow::Result<()> {
-    use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
-    use std::sync::mpsc;
-
-    let watch_path = &app_state.path;
-
-    println!(
-        "Watching {} for '{alias}:' markers (pattern: {pattern})...",
-        watch_path.display()
-    );
-    println!("Press SPACE to stop current work, Ctrl+C to quit.\n");
-
-    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-    let mut watcher = recommended_watcher(tx)?;
-    watcher.watch(watch_path, RecursiveMode::Recursive)?;
-
-    let config = &app_state.config;
-    let diff_tool = config.diff_tool.as_ref();
-
-    // Initial scan — always run, then snapshot hashes.
-    let _ = scan_and_complete_dispatch(
-        app_state,
-        &config.model,
-        alias,
-        diff_tool,
-        &pattern,
-        verbose,
-        config.personality,
-        no_ignore,
-        system_prompt,
-    )
-    .await;
-    let mut prev_hashes = snapshot_hashes(app_state, &pattern, no_ignore);
-
-    loop {
-        if crate::keyboard::should_stop() {
-            crate::keyboard::clear_stop();
-            continue;
-        }
-        if cleanup::is_shutting_down() {
-            break;
-        }
-
-        match rx.recv() {
-            Ok(Ok(_event)) => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                while rx.try_recv().is_ok() {}
-
-                // Skip processing if no file content has actually changed.
-                if !files_changed(app_state, &pattern, no_ignore, &prev_hashes) {
-                    continue;
-                }
-
-                if let Err(e) = scan_and_complete_dispatch(
-                    app_state,
-                    &config.model,
-                    alias,
-                    diff_tool,
-                    &pattern,
-                    verbose,
-                    config.personality,
-                    no_ignore,
-                    system_prompt,
-                )
-                .await
-                {
-                    eprintln!("Watch error: {e:?}");
-                }
-                prev_hashes = snapshot_hashes(app_state, &pattern, no_ignore);
-            }
-            Ok(Err(e)) => {
-                eprintln!("Watch error: {e}");
-            }
-            Err(mpsc::RecvError) => {
-                break;
-            }
-        }
-    }
-
-    Ok(())
 }
