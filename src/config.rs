@@ -19,6 +19,9 @@ pub enum Provider {
     Perplexity,
     Mistral,
     Cohere,
+    /// ChatGPT subscription via OAuth device flow (no API key required).
+    /// Authenticates against the ChatGPT backend at chatgpt.com/backend-api/codex.
+    ChatGPT,
     /// Generic OpenAI-compatible endpoint (custom URL required).
     #[serde(alias = "open_ai_compatible", alias = "openaicompatible")]
     OpenAiCompatible,
@@ -39,6 +42,7 @@ impl fmt::Display for Provider {
             Self::Perplexity => "Perplexity",
             Self::Mistral => "Mistral",
             Self::Cohere => "Cohere",
+            Self::ChatGPT => "ChatGPT",
             Self::OpenAiCompatible => "OpenAI-compatible",
         })
     }
@@ -126,7 +130,8 @@ pub struct ModelConfig {
     /// Which provider to use.
     ///
     /// Supported values: openai, anthropic, gemini, ollama, openrouter, xai,
-    /// deepseek, groq, together, perplexity, mistral, cohere, openaicompatible.
+    /// deepseek, groq, together, perplexity, mistral, cohere, chatgpt,
+    /// openaicompatible.
     pub provider: Provider,
 
     /// API base URL. Optional — when omitted the provider default is used.
@@ -157,6 +162,7 @@ pub struct ModelConfig {
     ///   perplexity:      PERPLEXITY_API_KEY
     ///   mistral:         MISTRAL_API_KEY
     ///   cohere:          COHERE_API_KEY
+    ///   chatgpt:         (OAuth device flow by default; CHATGPT_ACCESS_TOKEN optional)
     ///   openaicompatible: OPENAI_API_KEY
     pub api_key: Option<String>,
 
@@ -282,6 +288,23 @@ mod tests {
         .unwrap();
 
         assert!(config.write_answers);
+    }
+
+    #[test]
+    fn parses_chatgpt_provider_without_api_key() {
+        let config = parse(
+            r#"
+                [model]
+                provider = "chatgpt"
+                model = "gpt-5.3-codex"
+            "#,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.model.provider, Provider::ChatGPT);
+        assert_eq!(config.model.model, "gpt-5.3-codex");
+        assert!(config.model.api_key.is_none());
     }
 
     #[test]

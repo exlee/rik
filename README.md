@@ -268,9 +268,30 @@ table are also supported.
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | *(provider default)* |
 | Mistral | `mistral` | `MISTRAL_API_KEY` | *(provider default)* |
 | Cohere | `cohere` | `COHERE_API_KEY` | *(provider default)* |
+| ChatGPT (OAuth) | `chatgpt` | *(OAuth device flow; `CHATGPT_ACCESS_TOKEN` optional)* | `https://chatgpt.com/backend-api/codex` |
 | Custom endpoint | `openaicompatible` | `OPENAI_API_KEY` | *(required via `url`)* |
 
 The `openaicompatible` provider lets you target any OpenAI-compatible API (LM Studio, vLLM, local proxies, etc.) by setting a custom `url`.
+
+#### ChatGPT subscription via OAuth
+
+The `chatgpt` provider authenticates with a ChatGPT account using the OAuth
+device flow — **no API key required**. Use any ChatGPT subscription
+(Plus, Pro, etc.) to drive rik against models like `gpt-5.3-codex` or
+`gpt-5.4`.
+
+```toml
+[model]
+provider = "chatgpt"
+model = "gpt-5.3-codex"
+```
+
+On first run, rik prints a verification URL and device code, waits for you
+to complete sign-in in a browser, then caches the tokens at
+`~/.config/rik/chatgpt-auth.json` for subsequent runs. Refresh is automatic.
+
+To bypass OAuth with a pre-obtained access token (advanced), set
+`api_key = "..."` in the profile or export `CHATGPT_ACCESS_TOKEN`.
 
 When `diff_tool` is unset, rik auto-detects `difft`, `delta`, or plain `diff`.
 

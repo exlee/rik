@@ -153,6 +153,43 @@ pub fn build_cohere(cfg: &ModelConfig) -> Result<rig::providers::cohere::Client>
     Ok(builder.build().expect("Failed to build Cohere client"))
 }
 
+/// Build a ChatGPT subscription client from config.
+///
+/// Authenticates against the ChatGPT backend via OAuth device flow by default;
+/// no API key is required. Tokens are cached at `~/.config/rik/chatgpt-auth.json`
+/// and refreshed automatically. When `api_key` (or `CHATGPT_ACCESS_TOKEN`) is
+/// set, it is used as a raw access token instead of triggering OAuth.
+pub fn build_chatgpt(cfg: &ModelConfig) -> Result<rig::providers::chatgpt::Client> {
+    let auth_file = dirs::home_dir()
+        .map(|home| home.join(".config").join("rik").join("chatgpt-auth.json"))
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory for ChatGPT auth cache"))?;
+
+    let access_token = cfg
+        .api_key
+        .clone()
+        .or_else(|| std::env::var("CHATGPT_ACCESS_TOKEN").ok().filter(|s| !s.is_empty()));
+
+    let builder = rig::providers::chatgpt::Client::builder();
+    let builder = if let Some(token) = access_token {
+        builder.api_key(token)
+    } else {
+        builder.oauth()
+    };
+    let mut builder = builder
+        .auth_file(&auth_file)
+        .on_device_code(|prompt| {
+            println!(
+                "\nChatGPT sign-in required:\n  1) Visit: {}\n  2) Enter code: {}\n\
+                 Waiting for authorization (do not share this code)...\n",
+                prompt.verification_uri, prompt.user_code,
+            );
+        });
+    if let Some(url) = &cfg.url {
+        builder = builder.base_url(url.as_str());
+    }
+    Ok(builder.build().expect("Failed to build ChatGPT client"))
+}
+
 /// Resolve the API key: explicit value > env var > error.
 fn resolve_api_key(
     explicit: &Option<String>,
@@ -189,6 +226,7 @@ fn format_provider_name(p: Provider) -> &'static str {
         Provider::Perplexity => "Perplexity",
         Provider::Mistral => "Mistral",
         Provider::Cohere => "Cohere",
+        Provider::ChatGPT => "ChatGPT",
         Provider::OpenAiCompatible => "OpenAI-compatible",
     }
 }

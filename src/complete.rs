@@ -112,6 +112,7 @@ define_provider_dispatch!(
     Perplexity(build_perplexity)      => rig::providers::perplexity::Client,
     Mistral(build_mistral)            => rig::providers::mistral::Client,
     Cohere(build_cohere)              => rig::providers::cohere::Client,
+    ChatGPT(build_chatgpt)            => rig::providers::chatgpt::Client,
     OpenAiCompatible(build_openai_compatible) => rig::providers::openai::CompletionsClient,
 );
 
