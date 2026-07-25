@@ -18,9 +18,9 @@ struct Cli {
     /// (e.g. "src/**/*.rs,tests/**/*.rs")
     pattern: String,
 
-    /// Watch for changes and complete markers continuously
-    #[arg(short, long)]
-    watch: bool,
+    /// Complete markers once, then exit
+    #[arg(short = '1', long)]
+    once: bool,
 
     /// Marker alias prefix (default: "rik")
     #[arg(short, long, default_value = "rik")]
@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     });
 
-    if cli.watch {
+    if !cli.once {
         crate::keyboard::start_escape_listener();
         complete::cmd_watch(
             state,
@@ -135,6 +135,17 @@ mod tests {
     }
 
     #[test]
+    fn watches_by_default_and_supports_once_flags() {
+        let default = Cli::try_parse_from(["rik", "src"]).unwrap();
+        let long = Cli::try_parse_from(["rik", "--once", "src"]).unwrap();
+        let short = Cli::try_parse_from(["rik", "-1", "src"]).unwrap();
+
+        assert!(!default.once);
+        assert!(long.once);
+        assert!(short.once);
+    }
+
+    #[test]
     fn parses_system_prompt_flags() {
         let long =
             Cli::try_parse_from(["rik", "--system-prompt", "Respond in jokes", "src"]).unwrap();
@@ -167,6 +178,7 @@ mod tests {
         let help = Cli::command().render_help().to_string();
 
         assert!(help.contains("-s, --system-prompt <SYSTEM_PROMPT>"));
+        assert!(help.contains("-1, --once"));
         assert!(help.contains("--no-ignore"));
         assert!(help.contains("--write-answers"));
     }

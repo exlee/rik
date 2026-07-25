@@ -244,7 +244,7 @@ model = "mercury"
 ```
 
 ```bash
-rik --model openrouter.mercury 'src/**/*.rs'
+rik --once --model openrouter.mercury 'src/**/*.rs'
 ```
 
 The `openrouter.mercury` profile inherits `provider = "openrouter"`. Any shared
@@ -297,9 +297,9 @@ When `diff_tool` is unset, rik auto-detects `difft`, `delta`, or plain `diff`.
 
 ## Usage
 
-### Single pass
+### Watch mode
 
-Scan files matching a glob pattern and complete all markers in one go:
+Rik watches files by default and completes markers as they appear:
 
 ```bash
 rik 'src/**/*.rs'
@@ -311,11 +311,21 @@ Multiple patterns can be joined with commas:
 rik 'src/**/*.rs,tests/**/*.rs'
 ```
 
+Press Ctrl+C to stop watching. Press Escape to cancel the current processing loop (Unix only; not supported on Windows).
+
+### Single pass
+
+Pass `--once` or `-1` to scan files once, complete all current markers, then exit:
+
+```bash
+rik --once 'src/**/*.rs'
+```
+
 Scans honor `.gitignore`, `.ignore`, and git exclude files by default, and
 binary files are skipped. Pass `--no-ignore` to include ignored text files:
 
 ```bash
-rik --no-ignore 'src/**/*.rs'
+rik --once --no-ignore 'src/**/*.rs'
 ```
 
 ### Context markers
@@ -371,22 +381,12 @@ Surprised?
 rik: ??? Why this function returns only a bool
 ```
 
-### Watch mode
-
-Continuously monitor files and process markers as they appear:
-
-```bash
-rik -w 'src/**/*.rs'
-```
-
-Press Ctrl+C to stop watching. Press Escape to cancel the current processing loop (Unix only; not supported on Windows).
-
 ### Verbose mode
 
 Stream reasoning, tool calls, and text output in real-time:
 
 ```bash
-rik -v 'src/main.rs'
+rik --once -v 'src/main.rs'
 ```
 
 ### Custom alias
@@ -394,7 +394,7 @@ rik -v 'src/main.rs'
 Use a different trigger word instead of `rik`:
 
 ```bash
-rik -a todo 'src/**/*.rs'
+rik --once -a todo 'src/**/*.rs'
 ```
 
 This would look for `todo: <instruction>` markers instead.
@@ -404,8 +404,8 @@ This would look for `todo: <instruction>` markers instead.
 Give every edit task and question an additional overarching instruction:
 
 ```bash
-rik -s 'Make sure all responses are in joke form' 'src/**/*.rs'
-rik --system-prompt 'Your job is to write test corpus files in Rust' 'tests/**/*'
+rik --once -s 'Make sure all responses are in joke form' 'src/**/*.rs'
+rik --once --system-prompt 'Your job is to write test corpus files in Rust' 'tests/**/*'
 ```
 
 The system prompt applies for the entire run, including watch mode. Rik's built-in
