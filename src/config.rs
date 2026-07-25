@@ -220,7 +220,52 @@ fn select_model(config: &toml::Value, name: &str) -> anyhow::Result<toml::Value>
         }
     }
 
-    anyhow::bail!("Model profile '{name}' not found under [models] or [model]");
+    let available = configured_model_profiles(config);
+    let available = if available.is_empty() {
+        "none".to_owned()
+    } else {
+        available.join(", ")
+    };
+    anyhow::bail!(
+        "Model profile '{name}' not found under [models] or [model]. Available model profiles: {available}"
+    );
+}
+
+fn configured_model_profiles(config: &toml::Value) -> Vec<String> {
+    let mut profiles = Vec::new();
+    for root in ["models", "model"] {
+        let Some(table) = config.get(root).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        collect_model_profiles(config, root, table, &mut Vec::new(), &mut profiles);
+    }
+    profiles.sort();
+    profiles.dedup();
+    profiles
+}
+
+fn collect_model_profiles(
+    config: &toml::Value,
+    root: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    path: &mut Vec<String>,
+    profiles: &mut Vec<String>,
+) {
+    for (name, value) in table {
+        let Some(child) = value.as_table() else {
+            continue;
+        };
+        path.push(name.clone());
+        let parts: Vec<_> = path.iter().map(String::as_str).collect();
+        if select_model_from_root(config, root, &parts)
+            .and_then(|value| value.try_into::<ModelConfig>().ok())
+            .is_some()
+        {
+            profiles.push(path.join("."));
+        }
+        collect_model_profiles(config, root, child, path, profiles);
+        path.pop();
+    }
 }
 
 fn select_model_from_root(config: &toml::Value, root: &str, path: &[&str]) -> Option<toml::Value> {
@@ -501,15 +546,24 @@ mod tests {
     #[test]
     fn reports_missing_model_profile() {
         let error = parse(
-            "[models.openrouter]\napi_key = \"aaaa\"",
+            r#"
+                [models.openrouter]
+                provider = "openrouter"
+
+                [models.openrouter.gpt120]
+                model = "gpt-120:turbo"
+
+                [models.openrouter.fast]
+                model = "fast"
+            "#,
             Some("openrouter.missing"),
         )
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("Model profile 'openrouter.missing' not found")
+        assert_eq!(
+            error.to_string(),
+            "Model profile 'openrouter.missing' not found under [models] or [model]. \
+             Available model profiles: openrouter.fast, openrouter.gpt120"
         );
     }
 
