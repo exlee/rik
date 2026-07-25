@@ -1158,6 +1158,18 @@ where
         }
     }
 
+    // Vicinity-after suppresses per-edit diffs until reconciliation is complete.
+    // Show the subsequent marker cleanup, but not a second aggregate edit diff.
+    let before_marker_removal = (app_state.config.edition_constraints
+        == EditionConstraints::VicinityAfter)
+        .then(|| std::fs::read_to_string(file_path))
+        .transpose()
+        .with_context(|| {
+            format!(
+                "Failed to read before marker cleanup: {}",
+                file_path.display()
+            )
+        })?;
     if !remove_marker_after_change(file_path, alias, &task_marker, &content_before)? {
         _reverter.mark_success();
         anyhow::bail!(
@@ -1167,23 +1179,26 @@ where
         );
     }
 
-    // Show diff if the file changed.
-    let content_after = std::fs::read_to_string(file_path)
-        .with_context(|| format!("Failed to re-read: {}", file_path.display()))?;
-
-    if content_before != content_after
+    if let Some(before_marker_removal) = before_marker_removal
         && let Some(cmd) = resolve_diff_tool(diff_tool)
     {
         let label = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
+        let after_marker_removal = std::fs::read_to_string(file_path).with_context(|| {
+            format!(
+                "Failed to read after marker cleanup: {}",
+                file_path.display()
+            )
+        })?;
         println!("\n--- diff ({label}) ---");
-        let diff_output = run_diff(&cmd, label, &content_before, &content_after);
+        let diff_output = run_diff(&cmd, label, &before_marker_removal, &after_marker_removal);
         if !diff_output.is_empty() {
             println!("{diff_output}");
         }
     }
+
     _reverter.mark_success();
     if output.personality {
         personality::post_work_personality(alias);
