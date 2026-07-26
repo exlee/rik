@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-26
+
 ### Added
 - Discover agent skills from `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`, preferring the first location that defines a given skill name
 - Add a `skill` tool that loads a skill's instructions and its bundled reference files, and advertise the available skills to the agent for both tasks and questions
 - Preload skills into the agent preamble with `--skills`, failing with the full list of available skills when a name is unknown
 - Close a multiline marker with a delimiter trailing its last content line (`rik: [[ … third line ]]`) instead of requiring the delimiter on a line of its own
-
 - Remember each completed turn — tasks as a model-written what/why/how summary, questions as the question and its answer — and replay the summaries to later turns as a `History` block. Budgeted with `memory-tokens` / `--memory-tokens` (default 32000, 0 disables); on overflow the oldest two thirds are merged into one summary and the newest third follows it
 - Add a `recall` tool so the agent can read a remembered turn in full — request, reasoning, output, or diff — by id. Diffs and raw turn text are held outside the prompt, so the budget covers many more turns
 - Stop a running task as soon as the user edits the file being worked on, leaving both rik's partial work and the user's edit in place (no revert)

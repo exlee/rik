@@ -28,6 +28,16 @@ Think of it as leaving sticky notes for an LLM and having someone actually follo
 
 ## News
 
+### rik 0.6.0 remembers what it did
+
+Rik now keeps a session memory: every finished task and question is summarized
+into a `History` block that later turns get to read, with the full request,
+reasoning, output, and diff available on demand through the new `recall` tool.
+This release also adds skills, multiline markers that close on their last line,
+and a stop when you edit the file rik is working on.
+
+![rik remembers its work and picks up skills](./assets/rik_remembers.png)
+
 ### rik 0.5.0 adds safer edits and persistent answers
 
 Rik now supports run-wide system prompts, optional in-file `Q:` / `A:` answers,
