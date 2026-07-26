@@ -1,4 +1,3 @@
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -64,7 +63,7 @@ impl Tool for EditFileTool<'_> {
     type Args = EditFileArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+    fn description(&self) -> String {
         let mut desc = format!(
             "Edit {} by replacing exact text. \
              old_text must match exactly one occurrence in the file. \
@@ -79,10 +78,11 @@ impl Tool for EditFileTool<'_> {
             ));
             desc.push_str(" When multiple markers are present, the edit span has to end before the next marker.");
         }
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: desc,
-            parameters: json!({
+        desc
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
                 "type": "object",
                 "properties": {
                     "old_text": {
@@ -95,8 +95,7 @@ impl Tool for EditFileTool<'_> {
                     }
                 },
                 "required": ["old_text", "new_text"]
-            }),
-        }
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -701,8 +700,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_definition_includes_file_path() -> anyhow::Result<()> {
+    #[test]
+    fn test_definition_includes_file_path() -> anyhow::Result<()> {
         let app_state = crate::state::AppState::new(
             std::env::current_dir()?,
             crate::config::Config::default(),
@@ -713,11 +712,11 @@ mod tests {
             alias: "rik".to_string(),
             read_history: Arc::default(),
         };
-        let def = tool.definition(String::new()).await;
-        assert!(def.description.contains("src/main.rs"));
-        assert!(!def.description.contains("TARGET_PATH"));
+        let description = tool.description();
+        assert!(description.contains("src/main.rs"));
+        assert!(!description.contains("TARGET_PATH"));
         // file_path must NOT be a parameter
-        let params = serde_json::to_string(&def.parameters)?;
+        let params = serde_json::to_string(&tool.parameters())?;
         assert!(
             !params.contains("file_path"),
             "file_path should not appear in parameters, got: {params}"

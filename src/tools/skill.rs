@@ -1,4 +1,3 @@
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
@@ -64,17 +63,18 @@ impl Tool for SkillTool {
     type Args = SkillArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+    fn description(&self) -> String {
         let names = skills::invocable_names(self.skills).join(", ");
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: format!(
-                "Load a named skill: user-maintained instructions and reference material \
-                 for a kind of task. Call it before working when a skill matches the task, \
-                 then follow what it says. Pass `file` to read one of the skill's bundled \
-                 files. Available skills: {names}."
-            ),
-            parameters: json!({
+        format!(
+            "Load a named skill: user-maintained instructions and reference material \
+             for a kind of task. Call it before working when a skill matches the task, \
+             then follow what it says. Pass `file` to read one of the skill's bundled \
+             files. Available skills: {names}."
+        )
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
                 "type": "object",
                 "properties": {
                     "name": {
@@ -87,8 +87,7 @@ impl Tool for SkillTool {
                     }
                 },
                 "required": ["name"]
-            }),
-        }
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

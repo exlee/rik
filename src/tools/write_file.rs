@@ -1,4 +1,3 @@
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -54,27 +53,27 @@ impl Tool for WriteFileTool<'_> {
     type Args = WriteFileArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Write content to a new file. The file must not already exist. \
-                          Returns an error if the path points to an existing file or directory."
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path of the new file to create"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Full content to write into the file"
-                    }
+    fn description(&self) -> String {
+        "Write content to a new file. The file must not already exist. \
+                  Returns an error if the path points to an existing file or directory."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path of the new file to create"
                 },
-                "required": ["path", "content"]
-            }),
-        }
+                "content": {
+                    "type": "string",
+                    "description": "Full content to write into the file"
+                }
+            },
+            "required": ["path", "content"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

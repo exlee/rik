@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 use serde_json::{Map, Value, json};
@@ -45,7 +44,7 @@ impl DynamicCommandTool {
         })
     }
 
-    fn parameters(&self) -> Value {
+    fn parameter_schema(&self) -> Value {
         let mut properties = Map::new();
         let mut required = Vec::new();
         for part in &self.parts {
@@ -138,14 +137,12 @@ impl ToolDyn for DynamicCommandTool {
         self.name.clone()
     }
 
-    fn definition<'a>(&'a self, _prompt: String) -> WasmBoxedFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.clone(),
-                description: self.description.clone(),
-                parameters: self.parameters(),
-            }
-        })
+    fn description(&self) -> String {
+        self.description.clone()
+    }
+
+    fn parameters(&self) -> Value {
+        self.parameter_schema()
     }
 
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
@@ -228,7 +225,7 @@ mod tests {
                 .unwrap(),
             ["cat", "a.txt", "b.txt", "-n"]
         );
-        assert_eq!(tool.parameters()["required"], json!(["path", "args"]));
+        assert_eq!(tool.parameter_schema()["required"], json!(["path", "args"]));
     }
 
     #[test]

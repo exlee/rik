@@ -1,4 +1,3 @@
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -45,26 +44,26 @@ impl Tool for ListFilesTool<'_> {
     type Args = ListFilesArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List files in a directory. Respects .gitignore and .ignore rules. \
-                          Returns absolute paths. Optionally filter by glob pattern."
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute directory path to list from (default: watched directory)"
-                    },
-                    "glob": {
-                        "type": "string",
-                        "description": "Optional glob to filter results (e.g. \"**/*.rs\", \"*.toml\")"
-                    }
+    fn description(&self) -> String {
+        "List files in a directory. Respects .gitignore and .ignore rules. \
+                  Returns absolute paths. Optionally filter by glob pattern."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute directory path to list from (default: watched directory)"
+                },
+                "glob": {
+                    "type": "string",
+                    "description": "Optional glob to filter results (e.g. \"**/*.rs\", \"*.toml\")"
                 }
-            }),
-        }
+            }
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

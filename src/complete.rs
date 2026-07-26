@@ -497,7 +497,7 @@ where
         }
         match item {
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
-                let response = res.response();
+                let response = res.output();
                 if !response.is_empty() {
                     println!("\n\n== ANSWER START ==\n");
                     println!("{response}");
@@ -1159,7 +1159,7 @@ where
                 if is_reasoning && output.verbose {
                     print!("\n    \x1b[0m");
                 }
-                let summary = res.response();
+                let summary = res.output();
                 if summary.is_empty() {
                     println!("[{alias}]: Done.");
                 } else {

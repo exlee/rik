@@ -18,16 +18,16 @@ path = "src/main.rs"
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-rig = { package = "rig-core", version = "0.37.0", default-features = false, features = ["derive", "rustls"] }
+rig = { package = "rig-core", version = "0.40.0", default-features = false, features = ["derive", "rustls"] }
 futures = "0.3"
 glob = "0.3"
 ignore = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-shlex = "1"
+shlex = "2"
 tokio = { version = "1.52.3", features = ["full"] }
 dirs = "6"
-toml = "0.8"
+toml = "1"
 tempfile = "3"
 notify = "8"
 tracing = "0.1"

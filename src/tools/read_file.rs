@@ -1,5 +1,4 @@
 use dashmap::DashMap;
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -165,33 +164,33 @@ impl Tool for ReadFileTool<'_> {
     type Args = ReadFileArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read the contents of an existing file. \
-                          Optionally specify offset (1-based line number) and limit \
-                          to read only a portion of the file. Lines already returned \
-                          by this tool are omitted from later reads."
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path of the file to read"
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "description": "1-based line number to start reading from (optional)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of lines to return (optional)"
-                    }
+    fn description(&self) -> String {
+        "Read the contents of an existing file. \
+                  Optionally specify offset (1-based line number) and limit \
+                  to read only a portion of the file. Lines already returned \
+                  by this tool are omitted from later reads."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path of the file to read"
                 },
-                "required": ["path"]
-            }),
-        }
+                "offset": {
+                    "type": "integer",
+                    "description": "1-based line number to start reading from (optional)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return (optional)"
+                }
+            },
+            "required": ["path"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

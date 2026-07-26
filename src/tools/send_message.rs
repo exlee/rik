@@ -1,4 +1,3 @@
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -30,21 +29,21 @@ impl Tool for SendMessageTool {
     type Args = SendMessageArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Display a message and trigger the keyboard stop.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Message to display"
-                    }
-                },
-                "required": ["message"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Display a message and trigger the keyboard stop.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Message to display"
+                }
+            },
+            "required": ["message"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
