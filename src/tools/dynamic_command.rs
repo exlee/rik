@@ -242,8 +242,11 @@ mod tests {
         assert_eq!(tools[1].name(), "D3");
     }
 
+    // Running a command resyncs the watchdog, so these tests take its lock too.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn executes_fixed_command_without_a_shell() {
+        let _serialized = crate::watchdog::test_lock();
         let tool =
             DynamicCommandTool::parse("rik +tool: rustc --version", 1, "rik", Path::new("/tmp"))
                 .unwrap();
@@ -252,8 +255,10 @@ mod tests {
         assert!(output.starts_with("rustc "));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn returns_stdout_and_stderr_to_the_caller() {
+        let _serialized = crate::watchdog::test_lock();
         let tool = DynamicCommandTool::parse(
             "rik +tool: sh -c 'printf stdout; printf stderr >&2'",
             1,

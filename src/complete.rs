@@ -11,7 +11,7 @@ use crate::config::{EditionConstraints, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
 use crate::state::AppState;
-use crate::{cleanup, personality, raii, tools, watchdog};
+use crate::{cleanup, memory, personality, raii, tools, watchdog};
 
 #[derive(Default)]
 struct ScanOutcome {
@@ -943,10 +943,11 @@ where
          {}\n\n\
          Read the file and any other context you need, then perform the specified replacement \
          with content that is coherent with the rest of the file.\n\
-         Do NOT edit or remove the context note lines yourself; they will be cleaned up automatically.",
+         Do NOT edit or remove the context note lines yourself; they will be cleaned up automatically.{}",
         file_extension(file_path),
         task_block,
         context_section,
+        memory::history_block(),
     );
 
     let preamble = make_preamble(alias, &tool_inject, skill_section, system_prompt);
@@ -984,6 +985,8 @@ where
     let mut is_reasoning = false;
     let mut last_text = false;
     let mut pending_edit_diffs = HashMap::new();
+    // Captured whether or not it is printed — the summarizer reads it either way.
+    let mut turn_log = memory::TurnLog::default();
 
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
@@ -1014,37 +1017,45 @@ where
         match item {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
                 reasoning,
-            ))) if output.verbose => {
-                if !is_reasoning {
-                    is_reasoning = true;
-                    print!("\n    \x1b[90m// thinking...\x1b[0m\n");
+            ))) => {
+                let reasoning = reasoning.display_text();
+                turn_log.reasoning(&reasoning);
+                if output.verbose {
+                    if !is_reasoning {
+                        is_reasoning = true;
+                        print!("\n    \x1b[90m// thinking...\x1b[0m\n");
+                    }
+                    print!("\x1b[90m{reasoning}\x1b[0m");
+                    std::io::stdout().flush().ok();
                 }
-                print!("\x1b[90m{}\x1b[0m", reasoning.display_text());
-                std::io::stdout().flush().ok();
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. },
-            )) if output.verbose => {
-                if !is_reasoning {
-                    is_reasoning = true;
-                    print!("\n    \x1b[90m// thinking...\x1b[0m\n");
+            )) => {
+                turn_log.reasoning(&reasoning);
+                if output.verbose {
+                    if !is_reasoning {
+                        is_reasoning = true;
+                        print!("\n    \x1b[90m// thinking...\x1b[0m\n");
+                    }
+                    print!("\x1b[90m{}\x1b[0m", reasoning);
+                    std::io::stdout().flush().ok();
                 }
-                print!("\x1b[90m{}\x1b[0m", reasoning);
-                std::io::stdout().flush().ok();
             }
-            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)))
-                if output.verbose =>
-            {
-                if is_reasoning && output.verbose {
-                    is_reasoning = false;
-                    print!("\n    \x1b[0m");
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
+                turn_log.output(&text.text);
+                if output.verbose {
+                    if is_reasoning {
+                        is_reasoning = false;
+                        print!("\n    \x1b[0m");
+                    }
+                    if !last_text {
+                        print!("");
+                        last_text = true;
+                    }
+                    print!("{}", text.text);
+                    std::io::stdout().flush().ok();
                 }
-                if !last_text {
-                    print!("");
-                    last_text = true;
-                }
-                print!("{}", text.text);
-                std::io::stdout().flush().ok();
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
@@ -1155,6 +1166,7 @@ where
                     }
                     _ => tool_call.function.arguments.to_string(),
                 };
+                turn_log.tool(&format!("{} {msg}", tool_call.function.name));
                 if output.tool_calls {
                     println!("[tool]: {} {}", tool_call.function.name, msg);
                 }
@@ -1179,8 +1191,12 @@ where
                                 println!("{diff_output}");
                             }
                         }
-                    } else if output.tool_calls {
-                        println!("[tool]: edit_file error: {}", display_tool_error(&result));
+                    } else {
+                        let error = display_tool_error(&result);
+                        turn_log.tool(&format!("edit_file error: {error}"));
+                        if output.tool_calls {
+                            println!("[tool]: edit_file error: {error}");
+                        }
                     }
                 }
             }
@@ -1189,6 +1205,7 @@ where
                     print!("\n    \x1b[0m");
                 }
                 let summary = res.output();
+                turn_log.output(summary);
                 if summary.is_empty() {
                     println!("[{alias}]: Done.");
                 } else {
@@ -1267,6 +1284,30 @@ where
     _reverter.mark_success();
     if output.personality {
         personality::post_work_personality(alias);
+    }
+
+    // The turn is submitted: hand the whole log plus the final diff to the model
+    // and keep what it makes of it. A failure here costs the note, not the work.
+    let content_after = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Failed to read after completion: {}", file_path.display()))?;
+    if let Err(error) = memory::remember(
+        comp_client,
+        model_name,
+        app_state.config.memory_tokens,
+        &task_marker.query,
+        &file_path.display().to_string(),
+        turn_log.as_str(),
+        &memory::plain_diff(&content_before, &content_after),
+    )
+    .await
+    {
+        eprintln!("[{alias}]: could not remember this turn: {error}");
+    } else if output.verbose && app_state.config.memory_tokens > 0 {
+        println!(
+            "[{alias}]: memory {}/{} tokens.",
+            memory::used_tokens(),
+            app_state.config.memory_tokens
+        );
     }
 
     Ok(ScanOutcome {

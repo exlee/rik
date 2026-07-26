@@ -6,6 +6,7 @@ mod config;
 mod helpers;
 mod keyboard;
 mod markers;
+mod memory;
 mod personality;
 mod raii;
 mod skills;
@@ -56,6 +57,10 @@ struct Cli {
     /// (comma-separated, or repeat the flag)
     #[arg(long, value_delimiter = ',', value_name = "NAME")]
     skills: Vec<String>,
+
+    /// Token budget for remembered work replayed as History (0 disables memory)
+    #[arg(long, value_name = "TOKENS")]
+    memory_tokens: Option<usize>,
 }
 
 #[tokio::main]
@@ -72,6 +77,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if cli.write_answers {
         config.write_answers = true;
+    }
+    if let Some(memory_tokens) = cli.memory_tokens {
+        config.memory_tokens = memory_tokens;
     }
 
     let all_skills = skills::all();
@@ -207,6 +215,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_memory_tokens_flag() {
+        let set = Cli::try_parse_from(["rik", "--memory-tokens", "8000", "src"]).unwrap();
+        let off = Cli::try_parse_from(["rik", "--memory-tokens", "0", "src"]).unwrap();
+        let absent = Cli::try_parse_from(["rik", "src"]).unwrap();
+
+        assert_eq!(set.memory_tokens, Some(8_000));
+        assert_eq!(off.memory_tokens, Some(0));
+        assert_eq!(absent.memory_tokens, None, "config value is kept");
+    }
+
+    #[test]
     fn help_lists_system_prompt_flag() {
         use clap::CommandFactory as _;
 
@@ -217,6 +236,7 @@ mod tests {
         assert!(help.contains("--no-ignore"));
         assert!(help.contains("--write-answers"));
         assert!(help.contains("--skills <NAME>"));
+        assert!(help.contains("--memory-tokens <TOKENS>"));
     }
 
     #[test]

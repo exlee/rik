@@ -62,7 +62,12 @@ pub struct Config {
     pub write_answers: bool,
     /// Internal edit boundary policy.
     pub edition_constraints: EditionConstraints,
+    /// Token budget for the remembered `History` block. 0 disables memory.
+    pub memory_tokens: usize,
 }
+
+/// Default token budget for session memory.
+pub const DEFAULT_MEMORY_TOKENS: usize = 32_000;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -83,6 +88,7 @@ impl Default for Config {
             personality: false,
             write_answers: false,
             edition_constraints: EditionConstraints::VicinityAfter,
+            memory_tokens: DEFAULT_MEMORY_TOKENS,
         }
     }
 }
@@ -100,6 +106,8 @@ struct RawConfig {
     pub edition_constraints: Option<EditionConstraints>,
     #[serde(default)]
     pub marker_limits_edition_range: Option<bool>,
+    #[serde(default, rename = "memory-tokens", alias = "memory_tokens")]
+    pub memory_tokens: Option<usize>,
 }
 
 impl<'de> Deserialize<'de> for Config {
@@ -121,6 +129,7 @@ impl<'de> Deserialize<'de> for Config {
             personality: raw.personality,
             write_answers: raw.write_answers,
             edition_constraints,
+            memory_tokens: raw.memory_tokens.unwrap_or(DEFAULT_MEMORY_TOKENS),
         })
     }
 }
@@ -317,6 +326,20 @@ mod tests {
             config.edition_constraints,
             EditionConstraints::VicinityAfter
         );
+    }
+
+    #[test]
+    fn memory_budget_defaults_to_32k_and_is_configurable() {
+        let model = "[model]\nprovider = \"anthropic\"\nmodel = \"claude\"\n";
+
+        let default = parse(model, None).unwrap();
+        let dashed = parse(&format!("memory-tokens = 8000\n{model}"), None).unwrap();
+        let underscored = parse(&format!("memory_tokens = 0\n{model}"), None).unwrap();
+
+        assert_eq!(default.memory_tokens, DEFAULT_MEMORY_TOKENS);
+        assert_eq!(default.memory_tokens, 32_000);
+        assert_eq!(dashed.memory_tokens, 8_000);
+        assert_eq!(underscored.memory_tokens, 0, "0 disables memory");
     }
 
     #[test]

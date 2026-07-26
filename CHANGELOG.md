@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preload skills into the agent preamble with `--skills`, failing with the full list of available skills when a name is unknown
 - Close a multiline marker with a delimiter trailing its last content line (`rik: [[ … third line ]]`) instead of requiring the delimiter on a line of its own
 
+- Remember each completed turn: the model compacts the turn log and diff into a single note (what/why/how), and past notes are replayed to later tasks as a `History` block. Budgeted with `memory-tokens` / `--memory-tokens` (default 32000, 0 disables); on overflow the oldest two thirds are merged into one diff-less note and the newest third follows it
 - Stop a running task as soon as the user edits the file being worked on, leaving both rik's partial work and the user's edit in place (no revert)
 
 ### Changed

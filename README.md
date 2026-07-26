@@ -220,6 +220,9 @@ personality = false
 # Optional: replace question markers with Q/A blocks instead of only printing answers.
 write-answers = false
 
+# Optional: token budget for the session memory replayed as History. 0 disables it.
+memory-tokens = 32000
+
 # Internal: edit boundary policy.
 # none = allow edits anywhere in the target file
 # vicinity-before = reject each edit_file call outside the marker vicinity
@@ -420,6 +423,33 @@ rik --once --system-prompt 'Your job is to write test corpus files in Rust' 'tes
 
 The system prompt applies for the entire run, including watch mode. Rik's built-in
 operational rules still take precedence.
+
+### Memory
+
+Each time rik finishes a task and submits the diff, it hands the whole turn —
+reasoning, output, tool calls, and the final diff — back to the model and asks it
+to compact it into one note: what was done, why, and how. The note is stored with
+the original instruction and the diff, and every later task gets them appended to
+its prompt as a `History` section, so rik stays consistent with work it already
+did in this session.
+
+Memory lives for the run: it starts empty each time rik is launched and is not
+written to disk.
+
+The history has a token budget, 32,000 by default:
+
+```bash
+rik --memory-tokens 8000 'src/**/*.rs'   # smaller budget
+rik --memory-tokens 0 'src/**/*.rs'      # no memory, no extra model calls
+```
+
+When the budget is exceeded, the oldest two thirds of the notes are merged by the
+model into a single note — dropping their diffs, keeping the decisions — and the
+newest third follows it unchanged. If a single note still does not fit, diffs and
+then whole notes are dropped without asking the model, so the budget always holds.
+
+Budgeting counts roughly four characters per token; it is an estimate, not a
+tokenizer. Memory costs one extra model call per completed task.
 
 ## Tools
 
