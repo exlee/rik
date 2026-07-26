@@ -321,6 +321,8 @@ rik 'src/**/*.rs,tests/**/*.rs'
 
 Press Ctrl+C to stop watching. Press Escape to cancel the current processing loop (Unix only; not supported on Windows).
 
+If you edit the file rik is working on while it works, rik stops that task as soon as it notices. Nothing is reverted: whatever rik had already written stays, your edit stays, and the marker is left in place so the next scan can pick it up again.
+
 ### Single pass
 
 Pass `--once` or `-1` to scan files once, complete all current markers, then exit:

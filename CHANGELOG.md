@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preload skills into the agent preamble with `--skills`, failing with the full list of available skills when a name is unknown
 - Close a multiline marker with a delimiter trailing its last content line (`rik: [[ … third line ]]`) instead of requiring the delimiter on a line of its own
 
+- Stop a running task as soon as the user edits the file being worked on, leaving both rik's partial work and the user's edit in place (no revert)
+
 ### Changed
 - Update to `rig-core` 0.40, `toml` 1, and `shlex` 2, migrating tools to the split `description()` / `parameters()` trait methods and the unified `PromptResponse`
 

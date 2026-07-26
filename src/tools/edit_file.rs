@@ -165,6 +165,7 @@ impl Tool for EditFileTool<'_> {
                 new_content.push_str(&content[pos + args.old_text.len()..]);
 
                 std::fs::write(&path, &new_content)?;
+                crate::watchdog::resync();
                 self.read_history.clear();
 
                 Ok(format!(
@@ -292,6 +293,32 @@ mod tests {
             alias: "rik".to_string(),
             read_history: Arc::default(),
         }
+    }
+
+    // The tool call awaits while holding the test lock; that is fine here, the
+    // lock only serializes tests against the global watchdog state.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn an_agent_edit_does_not_look_like_a_user_edit() -> anyhow::Result<()> {
+        let _serialized = crate::watchdog::test_lock();
+        let dir = tempfile::tempdir()?;
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "before\nrik: first task\nafter\n")?;
+
+        let tool = make_tool(&file_path);
+        let _watchdog = crate::watchdog::guard(&file_path);
+        tool.call(EditFileArgs {
+            old_text: "before".into(),
+            new_text: "edited".into(),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        assert!(!crate::watchdog::changed_externally());
+
+        std::fs::write(&file_path, "user typed this\n")?;
+        assert!(crate::watchdog::changed_externally());
+        Ok(())
     }
 
     #[tokio::test]

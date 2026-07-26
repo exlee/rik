@@ -11,7 +11,7 @@ use crate::config::{EditionConstraints, ModelConfig, Provider};
 use crate::helpers::{expand_glob, resolve_diff_tool, run_diff};
 use crate::markers::MarkerKind;
 use crate::state::AppState;
-use crate::{cleanup, personality, raii, tools};
+use crate::{cleanup, personality, raii, tools, watchdog};
 
 #[derive(Default)]
 struct ScanOutcome {
@@ -487,12 +487,20 @@ where
         agent_builder = agent_builder.tools(tools);
     }
     let agent = agent_builder.build();
+    let _watchdog = watchdog::guard(file_path);
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut answer = None;
 
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
             crate::keyboard::clear_stop();
+            return Ok(false);
+        }
+        if watchdog::changed_externally() {
+            println!(
+                "[{alias}]: {} was modified outside {alias} — stopping.",
+                file_path.display()
+            );
             return Ok(false);
         }
         match item {
@@ -518,6 +526,14 @@ where
     };
 
     if answer.is_empty() {
+        return Ok(false);
+    }
+
+    if watchdog::changed_externally() {
+        println!(
+            "[{alias}]: {} was modified outside {alias} — answer not written back.",
+            file_path.display()
+        );
         return Ok(false);
     }
 
@@ -963,6 +979,7 @@ where
 
     let _reverter = raii::FileReverter::new(file_path, alias)
         .with_context(|| format!("Failed to read {} for backup", file_path.display()))?;
+    let _watchdog = watchdog::guard(file_path);
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut is_reasoning = false;
     let mut last_text = false;
@@ -974,6 +991,16 @@ where
                 _reverter.mark_success();
             }
             crate::keyboard::clear_stop();
+            return Ok(ScanOutcome::default());
+        }
+        if watchdog::changed_externally() {
+            // The file changed under us: leave everything as it is, including
+            // the work already done and the marker, and hand the file back.
+            _reverter.mark_success();
+            println!(
+                "[{alias}]: {} was modified outside {alias} — stopping (nothing reverted).",
+                file_path.display()
+            );
             return Ok(ScanOutcome::default());
         }
         if !matches!(
@@ -1176,6 +1203,17 @@ where
             }
             _ => {}
         }
+    }
+
+    // Cleanup below rewrites the file by line number, so a user edit that landed
+    // while the last turn streamed must stop us before we touch anything.
+    if watchdog::changed_externally() {
+        _reverter.mark_success();
+        println!(
+            "[{alias}]: {} was modified outside {alias} — stopping (nothing reverted).",
+            file_path.display()
+        );
+        return Ok(ScanOutcome::default());
     }
 
     if app_state.config.edition_constraints == EditionConstraints::VicinityAfter {

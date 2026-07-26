@@ -162,6 +162,8 @@ impl ToolDyn for DynamicCommandTool {
                 .output()
                 .await
                 .map_err(|error| ToolError::ToolCallError(Box::new(error)))?;
+            // A command rik ran is rik's own change, even if it rewrote the file.
+            crate::watchdog::resync();
 
             let mut result = String::new();
             if !output.stdout.is_empty() {

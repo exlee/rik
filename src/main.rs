@@ -11,6 +11,7 @@ mod raii;
 mod skills;
 mod state;
 mod tools;
+mod watchdog;
 
 #[derive(Parser)]
 #[command(name = "rik", about = "Complete '<alias>: <query>' markers in files")]
