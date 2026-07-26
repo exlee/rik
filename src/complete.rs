@@ -463,12 +463,13 @@ where
     let alias = options.alias;
     let prompt = format!(
         "Target file: {}\nFile type: {}\n\nQUESTION at line {}: {}\n\
-         Surrounding context:\n{}\n\nAnswer the question directly.",
+         Surrounding context:\n{}\n\nAnswer the question directly.{}",
         file_path.display(),
         file_extension(file_path),
         question_marker.start_line,
         question_text(question_marker),
         surrounding_lines(content, question_marker.start_line, 5),
+        memory::history_block(),
     );
 
     let mut agent_builder = comp_client
@@ -481,6 +482,7 @@ where
         .tool(tools::ReadFileTool::default())
         .tool(tools::ListFilesTool::default())
         .tool(tools::SkillTool::default())
+        .tool(tools::RecallTool)
         .default_max_turns(30);
     let (_, tools) = tools::find_dynamic_tools(content, alias, &app_state.path);
     if question_allows_dynamic_tools(question_marker) {
@@ -490,6 +492,7 @@ where
     let _watchdog = watchdog::guard(file_path);
     let mut stream = agent.stream_prompt(&prompt).await;
     let mut answer = None;
+    let mut turn_log = memory::TurnLog::default();
 
     while let Some(item) = stream.next().await {
         if cleanup::is_shutting_down() || crate::keyboard::should_stop() {
@@ -504,8 +507,19 @@ where
             return Ok(false);
         }
         match item {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
+                reasoning,
+            ))) => turn_log.reasoning(&reasoning.display_text()),
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::ReasoningDelta { reasoning, .. },
+            )) => turn_log.reasoning(&reasoning),
+            Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+                tool_call,
+                ..
+            })) => turn_log.tool(&tool_call.function.name),
             Ok(MultiTurnStreamItem::FinalResponse(res)) => {
                 let response = res.output();
+                turn_log.output(response);
                 if !response.is_empty() {
                     println!("\n\n== ANSWER START ==\n");
                     println!("{response}");
@@ -539,6 +553,21 @@ where
 
     if app_state.config.write_answers {
         write_answer_to_file(file_path, alias, question_marker, &answer)?;
+    }
+
+    // Questions are remembered too: the question and the answer as given, with
+    // the reasoning behind it available through `recall`.
+    if let Err(error) = memory::remember_answer(
+        comp_client,
+        model_name,
+        app_state.config.memory_tokens,
+        &question_text(question_marker),
+        &answer,
+        &turn_log,
+    )
+    .await
+    {
+        eprintln!("[{alias}]: could not remember this question: {error}");
     }
 
     app_state.remember_answered_question(file_path, question_marker);
@@ -969,6 +998,7 @@ where
         .tool(tools::ListFilesTool::default())
         .tool(tools::WriteFileTool::default())
         .tool(tools::SkillTool::default())
+        .tool(tools::RecallTool)
         .tools(dynamic_tools)
         .default_max_turns(30);
 
@@ -1141,6 +1171,9 @@ where
                             "???".to_string()
                         }
                     }
+                    // Memory bookkeeping is rik's own business — the user asked
+                    // for the task, not for a trace of how rik remembers it.
+                    "recall" => continue,
                     "send_message" => continue,
                     dynamic if tool_hash.contains_key(dynamic) => {
                         let (cmd, _) = tool_hash.get(dynamic).cloned().unwrap_or_default();
@@ -1296,7 +1329,7 @@ where
         app_state.config.memory_tokens,
         &task_marker.query,
         &file_path.display().to_string(),
-        turn_log.as_str(),
+        &turn_log,
         &memory::plain_diff(&content_before, &content_after),
     )
     .await

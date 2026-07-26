@@ -426,12 +426,27 @@ operational rules still take precedence.
 
 ### Memory
 
-Each time rik finishes a task and submits the diff, it hands the whole turn —
-reasoning, output, tool calls, and the final diff — back to the model and asks it
-to compact it into one note: what was done, why, and how. The note is stored with
-the original instruction and the diff, and every later task gets them appended to
-its prompt as a `History` section, so rik stays consistent with work it already
-did in this session.
+rik remembers what it has already done in this session. Every finished turn is
+kept whole in memory under an id — the request, the reasoning, the output, and,
+in its own store, the diff.
+
+What reaches the prompt is only a summary per turn. After a task, rik hands the
+whole turn plus its diff back to the model and asks for one compact account of
+what was done, why, and how; a question turn is remembered as the question and
+the answer, verbatim. Later turns get those summaries appended as a `History`
+section, along with the ids.
+
+The full detail stays in memory until the agent asks for it, through the
+`recall` tool:
+
+```text
+recall(id: 4, diff: true)                      # just the diff of memory 4
+recall(id: 4, request: true, reasoning: true)  # what was asked and how it was thought through
+recall(id: 4)                                  # everything
+```
+
+Because only summaries are budgeted, far more turns fit than their full text
+ever would. Recall calls are rik's own bookkeeping and are not printed.
 
 Memory lives for the run: it starts empty each time rik is launched and is not
 written to disk.
@@ -443,17 +458,19 @@ rik --memory-tokens 8000 'src/**/*.rs'   # smaller budget
 rik --memory-tokens 0 'src/**/*.rs'      # no memory, no extra model calls
 ```
 
-When the budget is exceeded, the oldest two thirds of the notes are merged by the
-model into a single note — dropping their diffs, keeping the decisions — and the
-newest third follows it unchanged. If a single note still does not fit, diffs and
-then whole notes are dropped without asking the model, so the budget always holds.
+When the budget is exceeded, the oldest two thirds of the summaries are merged by
+the model into a single summary — keeping the decisions, releasing the reasoning,
+output, and diffs behind them — and the newest third follows it unchanged. A
+`recall` on a released memory says so instead of failing. If a single summary
+still does not fit, memories are dropped without asking the model, so the budget
+always holds.
 
 Budgeting counts roughly four characters per token; it is an estimate, not a
 tokenizer. Memory costs one extra model call per completed task.
 
 ## Tools
 
-rik gives the agent six built-in tools during task processing:
+rik gives the agent seven built-in tools during task processing:
 
 | Tool | Purpose |
 |---|---|
@@ -463,6 +480,7 @@ rik gives the agent six built-in tools during task processing:
 | `list_files` | Discover text files in the project. Respects `.gitignore` and `.ignore`. Supports glob filters. |
 | `send_message` | Send a final status message without changing files. |
 | `skill` | Load a named skill — user-maintained instructions and reference material — or one of its bundled files. |
+| `recall` | Read a remembered turn in full by id: request, reasoning, output, diff. See [Memory](#memory). |
 
 All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 30 turns before producing final edits.
 
