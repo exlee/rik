@@ -69,12 +69,43 @@ fn matches_decorated_delimiter(line: &str, delimiter: &str, decoration: &str) ->
                 .is_some_and(|rest| rest.trim_start() == delimiter))
 }
 
+/// Text preceding a closing delimiter that trails real content on a line.
+///
+/// A block may be closed by a delimiter hanging off the end of its last content
+/// line (`this is line third ]]`) instead of sitting on a line of its own. The
+/// delimiter must be preceded by whitespace, and the text before it must carry
+/// something other than comment decoration -- a bare `// ]]` or `# ]]` stays on
+/// the decorated-closer path, which is decoration-sensitive.
+fn strip_trailing_delimiter<'a>(line: &'a str, close: &str) -> Option<&'a str> {
+    let before = line.trim_end().strip_suffix(close)?;
+    if !before.ends_with(char::is_whitespace) {
+        return None;
+    }
+    let before = before.trim_end();
+    if !before.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    Some(before)
+}
+
+/// Content of a closing line whose delimiter merely trails real text.
+///
+/// Cleanup deletes a multi-line marker's opening and closing lines; when the
+/// closer trails content, that content must survive, so callers keep this text
+/// (indentation included) instead of dropping the line.
+pub fn line_without_trailing_closer(line: &str) -> Option<&str> {
+    MULTILINE_DELIMITERS
+        .iter()
+        .find_map(|&(_, close)| strip_trailing_delimiter(line, close))
+}
+
 /// Find all markers matching the given alias prefix in content.
 ///
 /// Single-line: `{alias}: <query>` -- everything after the prefix on the same line.
 ///
 /// Multi-line: `{alias}: <open> [instruction]` starts a block, and a matching
-/// close delimiter ends it.
+/// close delimiter ends it, either on its own line or trailing the last
+/// content line.
 /// Supported delimiter pairs: `[`/`]`, `[[`/`]]`, `[[[`/`]]]`,
 /// `(`/`)`, `((`/`))`, `(((`/`)))`, `{`/`}`, `{{`/`}}`, `{{{`/`}}}`.
 /// Content between open and close is the query, with leading whitespace stripped
@@ -130,7 +161,8 @@ fn context_inner(query: &str) -> String {
 ///   If `<query>` starts and ends with `/` it is classified as `Context`.
 ///
 /// Multi-line: `{alias}: <open> [instruction]` starts a block, and a matching
-/// close delimiter ends it.
+/// close delimiter ends it, either alone on a line or trailing the last content
+/// line (`... this is line third ]]`).
 /// Supported delimiter pairs: `[`/`]`, `[[`/`]]`, `[[[`/`]]]`,
 /// `(`/`)`, `((`/`))`, `(((`/`)))`, `{`/`}`, `{{`/`}}`, `{{{`/`}}}`.
 /// Content between open and close is the query, with leading whitespace stripped
@@ -190,6 +222,8 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                     let mut j = i + 1;
                     while j < lines.len() {
                         let content_line = lines[j];
+                        // Content kept from a line whose closing delimiter trails it.
+                        let mut trailing_content: Option<&str> = None;
 
                         // Count how many times the exact close delimiter appears on this line.
                         // For multi-char delimiters ("[[", "[[[") we do an exact line match.
@@ -231,6 +265,11 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                                 -1
                             } else if matches_decorated_delimiter(content_line, open, decoration) {
                                 1
+                            } else if let Some(before) =
+                                strip_trailing_delimiter(content_line, close)
+                            {
+                                trailing_content = Some(before);
+                                -1
                             } else {
                                 0
                             }
@@ -244,6 +283,14 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                             };
                             if depth == 0 {
                                 found_close = true;
+                                // Keep any content preceding a trailing closer;
+                                // a bare or decorated closer contributes nothing.
+                                if !matches_decorated_delimiter(content_line, close, decoration)
+                                    && let Some(before) =
+                                        strip_trailing_delimiter(content_line, close)
+                                {
+                                    inner_lines.push(before.trim_start().to_string());
+                                }
                                 break;
                             }
                             // Don't add the line if it was purely the closing bracket
@@ -255,6 +302,9 @@ pub fn find_markers(content: &str, alias: &str) -> Vec<FoundMarker> {
                             depth = depth.saturating_sub(1);
                             if depth == 0 {
                                 found_close = true;
+                                if let Some(before) = trailing_content {
+                                    inner_lines.push(before.trim_start().to_string());
+                                }
                                 break;
                             }
                         } else if line_closes > 0 {
@@ -615,6 +665,75 @@ mod tests {
         assert_eq!(markers[0], task(1, 1, "( uppercase this"));
     }
 
+    // -----------------------------------------------------------------------
+    // Trailing closing delimiter tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_markers_multiline_closer_trailing_last_line() {
+        let content = "rik: [[ this is line first\n        this is line second\n        this is line third ]]";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(
+            markers[0],
+            task(
+                1,
+                3,
+                "this is line first\nthis is line second\nthis is line third"
+            )
+        );
+    }
+
+    #[test]
+    fn test_find_markers_multiline_trailing_closer_all_delimiters() {
+        for &(open, close) in MULTILINE_DELIMITERS {
+            let content = format!("before\nrik: {open} transform this\nbody line {close}\nafter");
+            let markers = find_markers(&content, "rik");
+
+            assert_eq!(markers.len(), 1, "failed for {open} {close}");
+            assert_eq!(
+                markers[0],
+                task(2, 3, "transform this\nbody line"),
+                "failed for {open} {close}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_markers_trailing_closer_preserves_later_marker() {
+        let content = "rik: [[ uppercase this\nbody ]]\nrik: later task";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0], task(1, 2, "uppercase this\nbody"));
+        assert_eq!(markers[1], task(3, 3, "later task"));
+    }
+
+    #[test]
+    fn test_find_markers_trailing_closer_requires_whitespace_before() {
+        // `body]]` is glued to the text, so it is body content, not a closer.
+        let content = "rik: [[ uppercase this\nbody]]\n]]";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 3, "uppercase this\nbody]]"));
+    }
+
+    #[test]
+    fn test_find_markers_trailing_closer_ignores_mismatched_decoration() {
+        // `# ]]` is a decorated closer, not content, so decoration matching still applies.
+        let content = "// rik: [[ transform this\nbody\n# ]]\nmore\n// ]]";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 5, "transform this\nbody\n# ]]\nmore"));
+    }
+
+    #[test]
+    fn test_find_markers_trailing_closer_single_char_with_nesting() {
+        let content = "rik: ( sum these numbers\n(3 + 4)\n5 )";
+        let markers = find_markers(content, "rik");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0], task(1, 3, "sum these numbers\n(3 + 4)\n5"));
+    }
+
     #[test]
     fn test_find_markers_multiline_curly_braces() {
         let content = "before\nrik: {{\nA\nB\nC\n}}\nafter";
@@ -797,11 +916,11 @@ mod tests {
     #[test]
     fn test_multi_char_no_nesting() {
         // Multi-char delimiters like [[ do NOT do character-level nesting.
-        // The whole trimmed line must match the delimiter atomically.
-        let content = "rik: [[\n[[ [ [ hello ] ] ]]\n]]\nafter";
+        // Only a line-terminating delimiter closes the block.
+        let content = "rik: [[\n[[ [ [ hello ] ] ]] world\n]]\nafter";
         let markers = find_markers(content, "rik");
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0], task(1, 3, "[[ [ [ hello ] ] ]]"));
+        assert_eq!(markers[0], task(1, 3, "[[ [ [ hello ] ] ]] world"));
     }
 
     #[test]

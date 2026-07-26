@@ -567,15 +567,17 @@ fn remove_marker(
     let kept: Vec<&str> = lines
         .iter()
         .enumerate()
-        .filter(|(idx, _)| {
-            let line = idx + 1;
-            if marker.start_line == marker.end_line {
-                line != marker.start_line
-            } else {
-                line != marker.start_line && line != marker.end_line
+        .filter_map(|(idx, line)| {
+            let line_no = idx + 1;
+            if line_no == marker.start_line {
+                return None;
             }
+            if marker.start_line == marker.end_line || line_no != marker.end_line {
+                return Some(*line);
+            }
+            // The closing delimiter may trail body content; keep that content.
+            crate::markers::line_without_trailing_closer(line)
         })
-        .map(|(_, line)| *line)
         .collect();
 
     let mut new_content = kept.join("\n");
@@ -1777,6 +1779,24 @@ mod tests {
 
         assert!(remove_marker(&file, "rik", &markers[0])?);
         assert_eq!(std::fs::read_to_string(&file)?, "before\nwork\nafter\n");
+        Ok(())
+    }
+
+    #[test]
+    fn completed_marker_cleanup_preserves_body_of_trailing_closer_line() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("markers.txt");
+        std::fs::write(
+            &file,
+            "before\nrik: [[ uppercase this\n    first line\n    second line ]]\nafter\n",
+        )?;
+        let markers = crate::markers::find_markers(&std::fs::read_to_string(&file)?, "rik");
+
+        assert!(remove_marker(&file, "rik", &markers[0])?);
+        assert_eq!(
+            std::fs::read_to_string(&file)?,
+            "before\n    first line\n    second line\nafter\n"
+        );
         Ok(())
     }
 

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Discover agent skills from `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`, preferring the first location that defines a given skill name
 - Add a `skill` tool that loads a skill's instructions and its bundled reference files, and advertise the available skills to the agent for both tasks and questions
 - Preload skills into the agent preamble with `--skills`, failing with the full list of available skills when a name is unknown
+- Close a multiline marker with a delimiter trailing its last content line (`rik: [[ … third line ]]`) instead of requiring the delimiter on a line of its own
 
 ### Changed
 - Update to `rig-core` 0.40, `toml` 1, and `shlex` 2, migrating tools to the split `description()` / `parameters()` trait methods and the unified `PromptResponse`

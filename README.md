@@ -74,6 +74,14 @@ text to transform
 )
 ```
 
+The closing delimiter can also trail the last line instead of standing alone:
+
+```
+rik: [[ this is line first
+        this is line second
+        this is line third ]]
+```
+
 ## Examples
 
 ### Simple inline replacement
