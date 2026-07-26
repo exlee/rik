@@ -413,7 +413,7 @@ operational rules still take precedence.
 
 ## Tools
 
-rik gives the agent five built-in tools during task processing:
+rik gives the agent six built-in tools during task processing:
 
 | Tool | Purpose |
 |---|---|
@@ -422,6 +422,7 @@ rik gives the agent five built-in tools during task processing:
 | `write_file` | Create new files (refuses to overwrite existing ones). |
 | `list_files` | Discover text files in the project. Respects `.gitignore` and `.ignore`. Supports glob filters. |
 | `send_message` | Send a final status message without changing files. |
+| `skill` | Load a named skill — user-maintained instructions and reference material — or one of its bundled files. |
 
 All file tools are sandboxed to the current working directory for relative input patterns, or to the absolute directory scope for absolute patterns. The agent can chain these tools across up to 30 turns before producing final edits.
 
@@ -444,6 +445,76 @@ from rik's working directory, without a shell.
 Dynamic tools are available only while processing the file that defines them.
 Normal edit tasks can use them automatically. Questions must explicitly opt in with
 `+tool` or `+tools`.
+
+## Skills
+
+rik reads the same skill directories other agents use, so instructions written once
+are shared across tools. On startup it scans, in order:
+
+```text
+~/.agents/skills/
+~/.codex/skills/
+~/.claude/skills/
+```
+
+Every subdirectory holding a `SKILL.md` file with YAML frontmatter becomes a skill:
+
+```markdown
+---
+name: cratesio-publish-checks
+description: Runs all pre-publish checks for a Rust crate. Use before publishing.
+allowed-tools: bash, read, edit
+---
+
+# Pre-publish checks
+
+1. Run `cargo fmt --check`.
+...
+```
+
+The skill name comes from `name`, falling back to the directory name. A skill needs a
+`description` — that one line is what rik shows the model, which then loads the full
+instructions with the `skill` tool only when the description matches the task. Files
+bundled next to `SKILL.md` are listed with the instructions and fetched on demand:
+`skill(name="clips", file="references/bpg642.md")`. Skill files are served by the
+`skill` tool, not `read_file`, and paths cannot escape the skill directory.
+
+When the same skill name exists in several locations, the first one wins:
+`~/.agents` beats `~/.codex`, which beats `~/.claude`. This lets `~/.agents` hold
+shared skills while agent-specific directories keep their own overrides.
+
+`allowed-tools` is informational — rik always offers its own tool set and tells the
+model to skip steps it cannot perform. Skills marked
+`disable-model-invocation: true` stay out of the catalog rik shows the model; they
+still load if a marker names them explicitly, e.g.
+`rik: use the changelog-write skill to update CHANGELOG.md`.
+
+Skills are available for both edit tasks and questions.
+
+### Preloading skills
+
+`--skills` puts a skill's full instructions in the agent's preamble from the first
+turn, instead of leaving the model to decide whether to load it:
+
+```bash
+rik --skills jujutsu-workflow 'src/**/*.rs'
+rik --skills clips,clips-integration --once 'rules/*.clp'
+rik --skills clips --skills clips-integration --once 'rules/*.clp'
+```
+
+Preloaded skills are dropped from the catalog, so the model is not told to fetch what
+it already has. Preloading works for any discovered skill, including
+`disable-model-invocation: true` ones. An unknown name aborts the run and prints every
+available skill with its source:
+
+```text
+$ rik --skills nope src
+Error: Unknown skill 'nope'. Available skills:
+  changelog-write (~/.agents) [manual]: Updates or creates a CHANGELOG.md ...
+  clips (~/.agents): Reference and guidance for writing or reviewing CLIPS ...
+```
+
+`[manual]` marks skills the model cannot pick on its own.
 
 ## Guardrails
 

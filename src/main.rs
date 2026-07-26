@@ -8,6 +8,7 @@ mod keyboard;
 mod markers;
 mod personality;
 mod raii;
+mod skills;
 mod state;
 mod tools;
 
@@ -49,6 +50,11 @@ struct Cli {
     /// Do not honor .gitignore, .ignore, or git exclude files when scanning
     #[arg(long)]
     no_ignore: bool,
+
+    /// Preload skills by name, so the agent starts with their full instructions
+    /// (comma-separated, or repeat the flag)
+    #[arg(long, value_delimiter = ',', value_name = "NAME")]
+    skills: Vec<String>,
 }
 
 #[tokio::main]
@@ -67,9 +73,23 @@ async fn main() -> anyhow::Result<()> {
         config.write_answers = true;
     }
 
+    let all_skills = skills::all();
+    let preloaded = skills::resolve_requested(all_skills, &cli.skills)?;
+    let skill_section = skills::prompt_section(all_skills, &preloaded)?;
+
     let state = state::init_for_pattern(&cli.pattern, config)?;
 
     print_motd(&cli.alias, cli.model.as_deref(), &state.config);
+    if !preloaded.is_empty() {
+        println!(
+            "Preloaded skill(s): {}\n",
+            preloaded
+                .iter()
+                .map(|skill| format!("{} ({})", skill.name, skill.source.label()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let _ = ctrlc::set_handler(|| {
         cleanup::cleanup();
         std::process::exit(0);
@@ -84,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
             cli.verbose,
             cli.no_ignore,
             cli.system_prompt.as_deref(),
+            &skill_section,
         )
         .await
     } else {
@@ -94,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
             cli.verbose,
             cli.no_ignore,
             cli.system_prompt.as_deref(),
+            &skill_section,
         )
         .await
     }
@@ -172,6 +194,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_skills_flag_as_comma_separated_or_repeated() {
+        let joined = Cli::try_parse_from(["rik", "--skills", "alpha,beta", "src"]).unwrap();
+        let repeated =
+            Cli::try_parse_from(["rik", "--skills", "alpha", "--skills", "beta", "src"]).unwrap();
+        let absent = Cli::try_parse_from(["rik", "src"]).unwrap();
+
+        assert_eq!(joined.skills, ["alpha", "beta"]);
+        assert_eq!(repeated.skills, ["alpha", "beta"]);
+        assert!(absent.skills.is_empty());
+    }
+
+    #[test]
     fn help_lists_system_prompt_flag() {
         use clap::CommandFactory as _;
 
@@ -181,6 +215,7 @@ mod tests {
         assert!(help.contains("-1, --once"));
         assert!(help.contains("--no-ignore"));
         assert!(help.contains("--write-answers"));
+        assert!(help.contains("--skills <NAME>"));
     }
 
     #[test]

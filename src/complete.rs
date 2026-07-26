@@ -41,6 +41,8 @@ struct ProcessingOptions<'a> {
     personality: bool,
     no_ignore: bool,
     system_prompt: Option<&'a str>,
+    /// Preamble section listing available skills and inlining preloaded ones.
+    skill_section: &'a str,
 }
 
 impl MarkerOutput {
@@ -208,7 +210,12 @@ fn append_system_prompt(mut preamble: String, system_prompt: Option<&str>) -> St
     preamble
 }
 
-fn make_preamble(alias: &str, tool_inject: &str, system_prompt: Option<&str>) -> String {
+fn make_preamble(
+    alias: &str,
+    tool_inject: &str,
+    skill_section: &str,
+    system_prompt: Option<&str>,
+) -> String {
     append_system_prompt(format!("\
 You are an in-place editor. A file contains '{alias}: <instruction>' markers that \
 must be replaced with real content. The file is a working document (code, prose, \
@@ -239,7 +246,7 @@ Rules:
 - Do NOT add comments explaining what you did. Just make the edit.
 - Do NOT echo back the file contents. The edit_file call IS your output.
 - After editing, provide a SHORT summary of what you changed (under 250 characters). \
-  A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description."),
+  A diff of your changes will be shown to the user separately, so focus on intent, not line-by-line description.{skill_section}"),
         system_prompt,
     )
 }
@@ -428,13 +435,13 @@ fn marker_replacement_instruction(
     }
 }
 
-fn make_question_preamble(alias: &str, system_prompt: Option<&str>) -> String {
+fn make_question_preamble(alias: &str, skill_section: &str, system_prompt: Option<&str>) -> String {
     append_system_prompt(
         format!(
             "You answer questions written in '{alias}:' file markers. This is a strictly read-only \
          mode: you have no tools that modify files. Read files only when needed for context. \
          Answer the questions directly and concisely. Do not describe your process, mention \
-         tools, add personality, or propose edits."
+         tools, add personality, or propose edits.{skill_section}"
         ),
         system_prompt,
     )
@@ -466,9 +473,14 @@ where
 
     let mut agent_builder = comp_client
         .agent(model_name)
-        .preamble(&make_question_preamble(alias, options.system_prompt))
+        .preamble(&make_question_preamble(
+            alias,
+            options.skill_section,
+            options.system_prompt,
+        ))
         .tool(tools::ReadFileTool::default())
         .tool(tools::ListFilesTool::default())
+        .tool(tools::SkillTool::default())
         .default_max_turns(30);
     let (_, tools) = tools::find_dynamic_tools(content, alias, &app_state.path);
     if question_allows_dynamic_tools(question_marker) {
@@ -802,6 +814,7 @@ where
         verbose,
         personality,
         system_prompt,
+        skill_section,
         ..
     } = options;
     let content_before = std::fs::read_to_string(file_path)
@@ -918,7 +931,7 @@ where
         context_section,
     );
 
-    let preamble = make_preamble(alias, &tool_inject, system_prompt);
+    let preamble = make_preamble(alias, &tool_inject, skill_section, system_prompt);
     let read_history = std::sync::Arc::new(tools::ReadFileHistory::default());
     let agent_builder = comp_client
         .agent(model_name)
@@ -936,6 +949,7 @@ where
         .tool(tools::SendMessageTool)
         .tool(tools::ListFilesTool::default())
         .tool(tools::WriteFileTool::default())
+        .tool(tools::SkillTool::default())
         .tools(dynamic_tools)
         .default_max_turns(30);
 
@@ -1071,6 +1085,17 @@ where
                                 display_tool_path(crate::state::get(), path)
                             } else {
                                 "???".to_string()
+                            }
+                        } else {
+                            "???".to_string()
+                        }
+                    }
+                    "skill" => {
+                        if let Some(obj) = tool_call.function.arguments.as_object() {
+                            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("???");
+                            match obj.get("file").and_then(|v| v.as_str()) {
+                                Some(file) if !file.is_empty() => format!("{name} file={file}"),
+                                _ => name.to_string(),
                             }
                         } else {
                             "???".to_string()
@@ -1256,6 +1281,7 @@ pub async fn cmd_complete(
     verbose: bool,
     no_ignore: bool,
     system_prompt: Option<&str>,
+    skill_section: &str,
 ) -> anyhow::Result<()> {
     let config = &app_state.config;
     let diff_tool = config.diff_tool.as_ref();
@@ -1270,6 +1296,7 @@ pub async fn cmd_complete(
             personality: config.personality,
             no_ignore,
             system_prompt,
+            skill_section,
         },
     )
     .await?;
@@ -1345,6 +1372,7 @@ pub async fn cmd_watch(
     verbose: bool,
     no_ignore: bool,
     system_prompt: Option<&str>,
+    skill_section: &str,
 ) -> anyhow::Result<()> {
     use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
     use std::sync::mpsc;
@@ -1376,6 +1404,7 @@ pub async fn cmd_watch(
             personality: config.personality,
             no_ignore,
             system_prompt,
+            skill_section,
         },
     )
     .await;
@@ -1411,6 +1440,7 @@ pub async fn cmd_watch(
                         personality: config.personality,
                         no_ignore,
                         system_prompt,
+                        skill_section,
                     },
                 )
                 .await
@@ -1488,8 +1518,8 @@ mod tests {
     fn system_prompt_is_appended_to_task_and_question_preambles() {
         let instruction = "Make every response a joke.";
 
-        let task = make_preamble("rik", "", Some(instruction));
-        let question = make_question_preamble("rik", Some(instruction));
+        let task = make_preamble("rik", "", "", Some(instruction));
+        let question = make_question_preamble("rik", "", Some(instruction));
 
         assert!(task.ends_with(instruction));
         assert!(question.ends_with(instruction));
@@ -1497,11 +1527,31 @@ mod tests {
 
     #[test]
     fn absent_system_prompt_does_not_add_overarching_instructions() {
-        let task = make_preamble("rik", "", None);
-        let question = make_question_preamble("rik", None);
+        let task = make_preamble("rik", "", "", None);
+        let question = make_question_preamble("rik", "", None);
 
         assert!(!task.contains("Additional overarching instructions"));
         assert!(!question.contains("Additional overarching instructions"));
+    }
+
+    #[test]
+    fn skill_catalog_is_injected_into_task_and_question_preambles() {
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().join(".agents/skills/changelog-write");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("SKILL.md"),
+            "---\nname: changelog-write\ndescription: Writes changelogs.\n---\nBody.\n",
+        )
+        .unwrap();
+        let section =
+            crate::skills::prompt_section(&crate::skills::discover(home.path()), &[]).unwrap();
+
+        let task = make_preamble("rik", "", &section, None);
+        let question = make_question_preamble("rik", &section, None);
+
+        assert!(task.contains("- changelog-write: Writes changelogs."));
+        assert!(question.contains("- changelog-write: Writes changelogs."));
     }
 
     #[test]
