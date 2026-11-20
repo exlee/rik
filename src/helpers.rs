@@ -4,7 +4,7 @@ use crate::config::{ModelConfig, Provider};
 
 /// Build an OpenAI Completions client from config.
 pub fn build_openai(cfg: &ModelConfig) -> Result<rig::providers::openai::CompletionsClient> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::OpenAI, Some("OPENAI_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::OpenAI, Some("OPENAI_API_KEY"))?;
     let mut builder = rig::providers::openai::CompletionsClient::builder().api_key(&api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -21,11 +21,7 @@ pub fn build_openai_compatible(
         .url
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Provider 'openaicompatible' requires 'url' in config"))?;
-    let api_key = resolve_api_key(
-        &cfg.api_key,
-        Provider::OpenAiCompatible,
-        Some("OPENAI_API_KEY"),
-    )?;
+    let api_key = resolve_api_key(cfg, Provider::OpenAiCompatible, Some("OPENAI_API_KEY"))?;
     let builder = rig::providers::openai::CompletionsClient::builder()
         .base_url(url)
         .api_key(&api_key);
@@ -36,7 +32,7 @@ pub fn build_openai_compatible(
 
 /// Build an Anthropic client from config.
 pub fn build_anthropic(cfg: &ModelConfig) -> Result<rig::providers::anthropic::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Anthropic, Some("ANTHROPIC_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Anthropic, Some("ANTHROPIC_API_KEY"))?;
     let mut builder = rig::providers::anthropic::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -46,7 +42,7 @@ pub fn build_anthropic(cfg: &ModelConfig) -> Result<rig::providers::anthropic::C
 
 /// Build a Gemini client from config.
 pub fn build_gemini(cfg: &ModelConfig) -> Result<rig::providers::gemini::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Gemini, Some("GEMINI_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Gemini, Some("GEMINI_API_KEY"))?;
     let mut builder = rig::providers::gemini::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -67,11 +63,7 @@ pub fn build_ollama(cfg: &ModelConfig) -> Result<rig::providers::ollama::Client>
 
 /// Build an OpenRouter client from config.
 pub fn build_openrouter(cfg: &ModelConfig) -> Result<rig::providers::openrouter::Client> {
-    let api_key = resolve_api_key(
-        &cfg.api_key,
-        Provider::OpenRouter,
-        Some("OPENROUTER_API_KEY"),
-    )?;
+    let api_key = resolve_api_key(cfg, Provider::OpenRouter, Some("OPENROUTER_API_KEY"))?;
     let mut builder = rig::providers::openrouter::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -81,7 +73,7 @@ pub fn build_openrouter(cfg: &ModelConfig) -> Result<rig::providers::openrouter:
 
 /// Build an xAI client from config.
 pub fn build_xai(cfg: &ModelConfig) -> Result<rig::providers::xai::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Xai, Some("XAI_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Xai, Some("XAI_API_KEY"))?;
     let mut builder = rig::providers::xai::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -91,7 +83,7 @@ pub fn build_xai(cfg: &ModelConfig) -> Result<rig::providers::xai::Client> {
 
 /// Build a DeepSeek client from config.
 pub fn build_deepseek(cfg: &ModelConfig) -> Result<rig::providers::deepseek::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::DeepSeek, Some("DEEPSEEK_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::DeepSeek, Some("DEEPSEEK_API_KEY"))?;
     let mut builder = rig::providers::deepseek::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -101,7 +93,7 @@ pub fn build_deepseek(cfg: &ModelConfig) -> Result<rig::providers::deepseek::Cli
 
 /// Build a Groq client from config.
 pub fn build_groq(cfg: &ModelConfig) -> Result<rig::providers::groq::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Groq, Some("GROQ_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Groq, Some("GROQ_API_KEY"))?;
     let mut builder = rig::providers::groq::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -111,7 +103,7 @@ pub fn build_groq(cfg: &ModelConfig) -> Result<rig::providers::groq::Client> {
 
 /// Build a Together client from config.
 pub fn build_together(cfg: &ModelConfig) -> Result<rig::providers::together::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Together, Some("TOGETHER_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Together, Some("TOGETHER_API_KEY"))?;
     let mut builder = rig::providers::together::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -121,11 +113,7 @@ pub fn build_together(cfg: &ModelConfig) -> Result<rig::providers::together::Cli
 
 /// Build a Perplexity client from config.
 pub fn build_perplexity(cfg: &ModelConfig) -> Result<rig::providers::perplexity::Client> {
-    let api_key = resolve_api_key(
-        &cfg.api_key,
-        Provider::Perplexity,
-        Some("PERPLEXITY_API_KEY"),
-    )?;
+    let api_key = resolve_api_key(cfg, Provider::Perplexity, Some("PERPLEXITY_API_KEY"))?;
     let mut builder = rig::providers::perplexity::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -135,7 +123,7 @@ pub fn build_perplexity(cfg: &ModelConfig) -> Result<rig::providers::perplexity:
 
 /// Build a Mistral client from config.
 pub fn build_mistral(cfg: &ModelConfig) -> Result<rig::providers::mistral::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Mistral, Some("MISTRAL_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Mistral, Some("MISTRAL_API_KEY"))?;
     let mut builder = rig::providers::mistral::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -145,7 +133,7 @@ pub fn build_mistral(cfg: &ModelConfig) -> Result<rig::providers::mistral::Clien
 
 /// Build a Cohere client from config.
 pub fn build_cohere(cfg: &ModelConfig) -> Result<rig::providers::cohere::Client> {
-    let api_key = resolve_api_key(&cfg.api_key, Provider::Cohere, Some("COHERE_API_KEY"))?;
+    let api_key = resolve_api_key(cfg, Provider::Cohere, Some("COHERE_API_KEY"))?;
     let mut builder = rig::providers::cohere::Client::builder().api_key(api_key);
     if let Some(url) = &cfg.url {
         builder = builder.base_url(url.as_str());
@@ -157,8 +145,9 @@ pub fn build_cohere(cfg: &ModelConfig) -> Result<rig::providers::cohere::Client>
 ///
 /// Authenticates against the ChatGPT backend via OAuth device flow by default;
 /// no API key is required. Tokens are cached at `~/.config/rik/chatgpt-auth.json`
-/// and refreshed automatically. When `api_key` (or `CHATGPT_ACCESS_TOKEN`) is
-/// set, it is used as a raw access token instead of triggering OAuth.
+/// and refreshed automatically. When `api_key` is set (as is
+/// `CHATGPT_ACCESS_TOKEN`), the value is used as a raw access token instead of
+/// triggering OAuth.
 pub fn build_chatgpt(cfg: &ModelConfig) -> Result<rig::providers::chatgpt::Client> {
     let auth_file = dirs::home_dir()
         .map(|home| home.join(".config").join("rik").join("chatgpt-auth.json"))
@@ -166,7 +155,8 @@ pub fn build_chatgpt(cfg: &ModelConfig) -> Result<rig::providers::chatgpt::Clien
 
     let access_token = cfg
         .api_key
-        .clone()
+        .as_deref()
+        .and_then(|key| expand_env_reference(key).ok())
         .or_else(|| std::env::var("CHATGPT_ACCESS_TOKEN").ok().filter(|s| !s.is_empty()));
 
     let builder = rig::providers::chatgpt::Client::builder();
@@ -190,26 +180,52 @@ pub fn build_chatgpt(cfg: &ModelConfig) -> Result<rig::providers::chatgpt::Clien
     Ok(builder.build().expect("Failed to build ChatGPT client"))
 }
 
-/// Resolve the API key: explicit value > env var > error.
+/// Resolve the API key: explicitly set value > default environment variable > error.
+/// If the explicitly set value is shaped like an environment variable lookup
+/// (`${VAR_NAME}`), it is read from the environment instead of being used as-is.
 fn resolve_api_key(
-    explicit: &Option<String>,
+    cfg: &ModelConfig,
     provider: Provider,
-    env_var: Option<&'static str>,
+    default_env: Option<&'static str>,
 ) -> Result<String> {
-    if let Some(key) = explicit {
-        return Ok(key.clone());
+    let provider_name = format_provider_name(provider);
+
+    if let Some(key) = &cfg.api_key {
+        return expand_env_reference(key)
+            .with_context(|| format!("Cannot resolve api_key for {provider_name}"));
     }
-    if let Some(var) = env_var
-        && let Ok(key) = std::env::var(var)
-    {
+    if let Some(var) = default_env && let Ok(key) = std::env::var(var) {
         return Ok(key);
     }
-    let provider_name = format_provider_name(provider);
     anyhow::bail!(
         "No API key for {provider_name}. \
          Set it in config or via {} environment variable.",
-        env_var.unwrap_or("<none>")
+        default_env.unwrap_or("<none>")
     )
+}
+
+/// Return the literal key, or the environment value when the whole string is
+/// `${VAR_NAME}`. Errors when the referenced variable is not set (or empty).
+fn expand_env_reference(key: &str) -> Result<String> {
+    expand_env_reference_with_lookup(key, |var| std::env::var(var).ok())
+}
+
+fn expand_env_reference_with_lookup(
+    key: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<String> {
+    let Some(var) = key
+        .strip_prefix("${")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .filter(|var| !var.is_empty())
+    else {
+        return Ok(key.to_owned());
+    };
+    lookup(var)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("Environment variable '{var}' (referenced by api_key) is not set")
+        })
 }
 
 fn format_provider_name(p: Provider) -> &'static str {
@@ -489,6 +505,35 @@ pub fn run_diff(args: &[String], label: &str, old_content: &str, new_content: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_api_key_is_returned_directly() {
+        assert_eq!(expand_env_reference("sk-literal").unwrap(), "sk-literal");
+        // Partial references are not expanded.
+        assert_eq!(
+            expand_env_reference("prefix-${VAR}-suffix").unwrap(),
+            "prefix-${VAR}-suffix"
+        );
+        assert_eq!(expand_env_reference("${}").unwrap(), "${}");
+    }
+
+    #[test]
+    fn templated_api_key_is_looked_up() {
+        assert_eq!(
+            expand_env_reference_with_lookup("${MY_TOKEN}", |_| Some("secret-value".to_owned()))
+                .unwrap(),
+            "secret-value"
+        );
+        // Empty value counts as unset.
+        assert!(expand_env_reference_with_lookup("${MY_TOKEN}", |_| Some(String::new())).is_err());
+        assert!(expand_env_reference_with_lookup("${MY_TOKEN}", |_| None).is_err());
+    }
+
+    #[test]
+    fn env_reference_api_key_requires_a_set_variable() {
+        let error = expand_env_reference("${RIK_TEST_EXPANSION_TOKEN}").unwrap_err();
+        assert!(error.to_string().contains("RIK_TEST_EXPANSION_TOKEN"));
+    }
 
     #[test]
     fn watched_directory_uses_absolute_glob_prefix_even_without_matches() -> anyhow::Result<()> {
