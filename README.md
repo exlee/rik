@@ -242,8 +242,10 @@ edition-constraints = "vicinity-after"
 [model]
 provider = "openai"
 model = "gpt-4o"
-# api_key is optional — omit to read from environment variable
-# url is optional — omit to use the provider default endpoint
+# API key is optional — omit to read from environment variable
+#api_key = "..."                  # literal key
+#api_key = "${MY_SERVICE_TOKEN}"  # custom environment variable
+# URL is optional — omit to use the provider default endpoint
 #url = "https://api.openai.com/v1"
 ```
 
